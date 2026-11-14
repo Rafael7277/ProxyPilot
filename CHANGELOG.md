@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.7](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.6...v1.0.0-alpha.7) (2026-11-14)
+
+
+### Features
+
+* **ssh:** add two-pane file manager and independent terminals ([#16](https://github.com/Rafael7277/ProxyPilot/issues/16)) ([3017975](https://github.com/Rafael7277/ProxyPilot/commit/30179758cd37fc9a36e3b2648ed38abd4dab8065))
+
 ## [1.0.0-alpha.6](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.5...v1.0.0-alpha.6) (2026-11-14)
 
 
