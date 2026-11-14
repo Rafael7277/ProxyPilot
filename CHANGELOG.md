@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.10](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.9...v1.0.0-alpha.10) (2026-11-14)
+
+
+### Bug Fixes
+
+* **ssh:** restore SFTP actions and share verified sessions ([#25](https://github.com/Rafael7277/ProxyPilot/issues/25)) ([50db6ca](https://github.com/Rafael7277/ProxyPilot/commit/50db6ca06e3c0f56126742c14381e3d7aa7671a1))
+
 ## [1.0.0-alpha.9](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.8...v1.0.0-alpha.9) (2026-11-14)
 
 
