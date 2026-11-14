@@ -12,7 +12,7 @@
 - Reports the requested policy, effective launcher/service configuration, observed connections, and verification result separately.
 - Includes a command-line interface suitable for local terminals and SSH sessions without `DISPLAY`.
 - Includes a GTK 4 desktop client that uses the same application API as the CLI.
-- Includes a standalone two-pane SSH/SFTP file manager. Either side can use a local folder or a saved SSH profile, including transfers between two servers.
+- Includes a standalone two-pane SSH/SFTP file manager. Connect from the SSH / SFTP profile page; remote panes connect automatically when selected. Either side can use a local folder or a saved SSH profile, including transfers between two servers.
 - Opens every SSH terminal in its own window with a fresh verified SSH session. Saved profiles can be selected, edited, and deleted from the profile list.
 - Can route an SSH connection through the ProxyPilot proxy-only bridge. A failed proxy tunnel stops the connection instead of falling back to a direct route.
 - Inspects same-user Linux processes, TCP sockets, GNOME settings, and systemd user environment without root.
@@ -135,7 +135,7 @@ Launch with:
 proxypilot-gui
 ```
 
-The GTK client contains Dashboard, Applications, SSH / SFTP, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. The SSH page opens a separate file-manager window with two independently selected endpoints, multi-select, drag-and-drop move, Copy/Cut/Paste, create, rename, delete, overwrite confirmation, transfer progress, and cancellation. Directory copies are staged before publication; symlinks are not followed and folder deletion is limited to empty folders. Each New Terminal click opens a new window and SSH session. Network and file operations run off the UI thread. Changes to app or system routes require a confirmation dialog.
+The GTK client contains Dashboard, Applications, SSH / SFTP, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. The SSH page opens a separate file-manager window with two independently selected endpoints, multi-select, drag-and-drop move, and a right-click menu for file actions. The manager shows transfer percentage, byte progress, and a cancel action. Transient SSH/SFTP transport loss triggers bounded automatic reconnect attempts; regular files resume from the retained partial-file offset after source metadata is rechecked, including files inside staged directory transfers. Unknown or changed host keys still require manual review. Symlinks are not followed and folder deletion is limited to empty folders. Each New Terminal click opens a new window and SSH session. Network and file operations run off the UI thread. Changes to app or system routes require a confirmation dialog.
 
 ## Configuration and migration
 

@@ -9,7 +9,7 @@ Status reflects tested implementation, not aspiration.
 | KDE Plasma proxy settings | Unsupported | System proxy adapter does not write KDE settings. |
 | Wayland window attribution | Conservative / unknown | X11 window tools are skipped for Wayland; process and TCP scans remain best-effort. |
 | Headless SSH CLI | Local headless smoke passed | JSON status works with `DISPLAY` removed and without importing GTK. A separate remote SSH login was not available. |
-| SSH / SFTP workspace | Local protocol tests and GTK window smoke pass | The separate two-pane manager supports local/remote and remote/remote transfers; saved profile selection/deletion and opening multiple terminal windows are smoke-tested. Physical drag/drop and a live login to a separately configured server still need manual interoperability acceptance. |
+| SSH / SFTP workspace | Mocked transfer recovery, partial-file resume, and GTK smoke pass | The profile page owns connection controls; file panes connect on profile selection and expose file actions from the context menu. Progress, cancellation, retry, and byte-offset resume are covered with local protocol doubles. Physical drag/drop and live login to a separately configured server still need manual interoperability acceptance. |
 | Embedded SSH terminal | Implemented with GTK 4 VTE | Requires `gir1.2-vte-3.91` and a supported GTK 4 PyGObject environment. SFTP does not require VTE. |
 | User systemd bridge service | Implemented | Requires an active user manager; linger is detected but never enabled automatically. |
 | Non-systemd distributions | Unsupported for service integration | CLI diagnostics and direct process inspection may work; service install does not. |

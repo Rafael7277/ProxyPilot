@@ -55,6 +55,10 @@ Changes are tracked using Semantic Versioning. Release notes are reviewed before
 
 ### Added
 
+- Main-page SSH connection controls; the file manager and terminal no longer expose their own connect/reconnect buttons. Server panes connect automatically when selected.
+- Right-click file actions for open, copy, cut, paste, create, rename, and delete; the file-manager toolbar keeps the transfer cancel action.
+- Transfer percentage and byte progress, automatic SSH reconnection with bounded backoff, and resumable file/directory transfers that continue from the last verified partial-file offset.
+- Source metadata checks before resuming, separate SFTP channels for child file-manager windows, and regression coverage for rendered file rows and interrupted transfers.
 - Password field in the SSH profile page; its value is held in memory for the current app run and passed to SFTP/terminal sessions without being written to profile files.
 - Separate two-pane SSH/SFTP file manager with independently selectable local or SSH endpoints, including transfers between two servers.
 - Drag-and-drop move, multi-item Copy/Cut/Paste, new files and folders, rename, safe delete, overwrite confirmation, progress, and cancellation.

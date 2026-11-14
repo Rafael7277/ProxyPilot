@@ -493,6 +493,9 @@ def _sftp(session: "RemoteSession"):
         raise RemoteAccessError("SSH connection is closed")
     if session.sftp is None:
         session.sftp = session.client.open_sftp()
+        channel = getattr(session.sftp, "get_channel", lambda: None)()
+        if channel is not None:
+            channel.settimeout(5.0)
     return session.sftp
 
 
@@ -704,9 +707,15 @@ def _open_source(session: "RemoteSession | None", path: str | Path):
 def _write_file(session: "RemoteSession | None", destination: str | Path,
                 reader: Any, size: int, *, overwrite: bool,
                 progress: Callable[[int, int], None] | None,
-                cancel: threading.Event | None) -> None:
+                cancel: threading.Event | None,
+                resume_id: str | None = None) -> None:
+    if resume_id is not None and not re.fullmatch(r"[a-f0-9]{32}", resume_id):
+        raise ValueError("Invalid internal transfer resume ID")
+
     def copy_chunks(stream):
-        transferred = 0
+        transferred = int(reader.tell()) if hasattr(reader, "tell") else 0
+        if progress is not None:
+            progress(transferred, size)
         while True:
             if cancel is not None and cancel.is_set():
                 raise InterruptedError("Transfer cancelled")
@@ -734,10 +743,28 @@ def _write_file(session: "RemoteSession | None", destination: str | Path,
                 raise IsADirectoryError("Cannot replace a non-file destination")
         target = PurePosixPath(final_path)
         temporary = str(target.with_name(
+            f".{target.name}.proxypilot-{resume_id}.part" if resume_id else
             f".proxypilot-{secrets.token_hex(12)}.part"))
         backup = None
         try:
-            with sftp.open(temporary, "xb") as stream:
+            offset = 0
+            part_exists = bool(resume_id and _remote_exists(sftp, temporary))
+            if part_exists:
+                part_info = sftp.lstat(temporary)
+                if stat.S_ISLNK(part_info.st_mode or 0) or not stat.S_ISREG(part_info.st_mode or 0):
+                    raise RemoteAccessError("Refusing to resume a non-regular partial file")
+                offset = int(part_info.st_size or 0)
+                if offset > size:
+                    sftp.remove(temporary)
+                    offset = 0
+                    part_exists = False
+            if offset:
+                reader.seek(offset)
+            elif part_exists:
+                reader.seek(0)
+            with sftp.open(temporary, "r+b" if part_exists else "xb") as stream:
+                if offset:
+                    stream.seek(offset)
                 copy_chunks(stream)
             if int(sftp.stat(temporary).st_size or 0) != size:
                 raise RemoteAccessError("Remote file size verification failed")
@@ -762,10 +789,11 @@ def _write_file(session: "RemoteSession | None", destination: str | Path,
                 except OSError:
                     pass
         except Exception:
-            try:
-                sftp.remove(temporary)
-            except OSError:
-                pass
+            if resume_id is None or (cancel is not None and cancel.is_set()):
+                try:
+                    sftp.remove(temporary)
+                except OSError:
+                    pass
             raise
         return
 
@@ -779,11 +807,36 @@ def _write_file(session: "RemoteSession | None", destination: str | Path,
         raise FileExistsError("Local destination already exists")
     if exists and final_path.is_dir():
         raise IsADirectoryError("Cannot replace a directory with a file")
-    fd, temporary_name = tempfile.mkstemp(prefix=".proxypilot-",
-                                           suffix=".part", dir=parent)
-    temporary = Path(temporary_name)
+    temporary = (parent / f".{final_path.name}.proxypilot-{resume_id}.part"
+                 if resume_id else None)
+    offset = 0
+    if temporary is None:
+        fd, temporary_name = tempfile.mkstemp(prefix=".proxypilot-",
+                                               suffix=".part", dir=parent)
+        temporary = Path(temporary_name)
+        mode = "w+b"
+    else:
+        part_exists = temporary.exists()
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        mode = "r+b" if part_exists else "w+b"
+        if not part_exists:
+            flags |= os.O_CREAT | os.O_EXCL
+        fd = os.open(temporary, flags, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            raise RemoteAccessError("Refusing to resume a non-regular partial file")
+        if part_exists:
+            offset = int(info.st_size)
+            if offset > size:
+                os.ftruncate(fd, 0)
+                offset = 0
+            reader.seek(offset)
     try:
-        with os.fdopen(fd, "wb") as stream:
+        with os.fdopen(fd, mode) as stream:
+            fd = -1
+            if offset:
+                stream.seek(offset)
             copy_chunks(stream)
             stream.flush()
             os.fsync(stream.fileno())
@@ -795,10 +848,11 @@ def _write_file(session: "RemoteSession | None", destination: str | Path,
             os.link(temporary, final_path, follow_symlinks=False)
             temporary.unlink()
     except Exception:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
+        if resume_id is None or (cancel is not None and cancel.is_set()):
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
         raise
 
 
@@ -823,7 +877,8 @@ def transfer_entry(source_session: "RemoteSession | None", source_path: str | Pa
                    destination_directory: str | Path, *, move: bool = False,
                    overwrite: bool = False,
                    progress: Callable[[int, int], None] | None = None,
-                   cancel: threading.Event | None = None) -> str | Path:
+                   cancel: threading.Event | None = None,
+                   resume_id: str | None = None) -> str | Path:
     """Copy one file or directory between local/SFTP endpoints, then optionally move it.
 
     A directory is staged under a unique temporary name and published by rename only
@@ -860,7 +915,8 @@ def transfer_entry(source_session: "RemoteSession | None", source_path: str | Pa
         destination = _endpoint_join(destination_session, destination_directory, source_name)
         with _open_source(source_session, source_path) as reader:
             _write_file(destination_session, destination, reader, int(info.st_size or 0),
-                        overwrite=overwrite, progress=progress, cancel=cancel)
+                        overwrite=overwrite, progress=progress, cancel=cancel,
+                        resume_id=resume_id)
         if move:
             try:
                 if source_session is None:
@@ -875,6 +931,8 @@ def transfer_entry(source_session: "RemoteSession | None", source_path: str | Pa
 
     if overwrite:
         raise IsADirectoryError("Replacing or merging an existing directory is not supported")
+    if resume_id is not None and not re.fullmatch(r"[a-f0-9]{32}", resume_id):
+        raise ValueError("Invalid internal transfer resume ID")
     if _destination_exists(destination_session, destination):
         raise FileExistsError("Destination directory already exists")
 
@@ -883,35 +941,52 @@ def transfer_entry(source_session: "RemoteSession | None", source_path: str | Pa
         final_directory = parent / source_name
         if final_directory.exists() or final_directory.is_symlink():
             raise FileExistsError("Destination directory already exists")
-        staging = Path(tempfile.mkdtemp(prefix=".proxypilot-", dir=parent))
+        if resume_id is None:
+            staging = Path(tempfile.mkdtemp(prefix=".proxypilot-", dir=parent))
+        else:
+            staging = parent / f".proxypilot-{resume_id}.part"
+            if staging.is_symlink() or (staging.exists() and not staging.is_dir()):
+                raise RemoteAccessError("Refusing to resume an unsafe staging directory")
+            staging.mkdir(mode=0o700, exist_ok=True)
         published = False
         try:
             _copy_directory_contents(source_session, source_path, destination_session,
-                                     staging, progress=progress, cancel=cancel)
+                                     staging, progress=progress, cancel=cancel,
+                                     resume_id=resume_id)
             if final_directory.exists() or final_directory.is_symlink():
                 raise FileExistsError("Destination directory appeared during transfer")
             os.rename(staging, final_directory)
             published = True
         finally:
-            if not published:
+            if not published and (resume_id is None or
+                                  (cancel is not None and cancel.is_set())):
                 shutil.rmtree(staging, ignore_errors=True)
         destination = final_directory
     else:
         sftp = _sftp(destination_session)
         parent = str(destination_directory)
-        staging = posixpath.join(parent,
-            f".proxypilot-{secrets.token_hex(12)}.part")
-        sftp.mkdir(staging)
+        staging = posixpath.join(parent, f".proxypilot-{resume_id}.part"
+                                 if resume_id else
+                                 f".proxypilot-{secrets.token_hex(12)}.part")
+        if resume_id and _remote_exists(sftp, staging):
+            staging_info = sftp.lstat(staging)
+            if (stat.S_ISLNK(staging_info.st_mode or 0) or
+                    not stat.S_ISDIR(staging_info.st_mode or 0)):
+                raise RemoteAccessError("Refusing to resume an unsafe staging directory")
+        else:
+            sftp.mkdir(staging)
         published = False
         try:
             _copy_directory_contents(source_session, source_path, destination_session,
-                                     staging, progress=progress, cancel=cancel)
+                                     staging, progress=progress, cancel=cancel,
+                                     resume_id=resume_id)
             if _remote_exists(sftp, str(destination)):
                 raise FileExistsError("Destination directory appeared during transfer")
             sftp.rename(staging, str(destination))
             published = True
         finally:
-            if not published:
+            if not published and (resume_id is None or
+                                  (cancel is not None and cancel.is_set())):
                 try:
                     _remove_tree(destination_session, staging)
                 except Exception:
@@ -955,28 +1030,54 @@ def entry_type(session: "RemoteSession | None", path: str | Path) -> str | None:
     return "special"
 
 
+def entry_metadata(session: "RemoteSession | None", path: str | Path) -> dict[str, Any]:
+    """Return stable attributes used to validate a resumable transfer source."""
+    info = _endpoint_lstat(session, path)
+    mode = info.st_mode or 0
+    return {"is_dir": stat.S_ISDIR(mode), "size": int(info.st_size or 0),
+            "mtime": int(info.st_mtime or 0)}
+
+
 def _copy_directory_contents(source_session: "RemoteSession | None", source_path: str | Path,
                              destination_session: "RemoteSession | None",
                              destination_path: str | Path, *,
                              progress: Callable[[int, int], None] | None,
-                             cancel: threading.Event | None) -> None:
+                             cancel: threading.Event | None,
+                             resume_id: str | None = None) -> None:
     for item in _endpoint_list(source_session, source_path):
         if cancel is not None and cancel.is_set():
             raise InterruptedError("Transfer cancelled")
         if item["is_symlink"]:
             raise RemoteAccessError(f"Refusing to copy symbolic link: {item['name']}")
         source = _endpoint_join(source_session, source_path, item["name"])
+        child_id = (hashlib.sha256(
+            f"{resume_id}\0{item['name']}\0{item['size']}\0{item['mtime']}".encode()
+        ).hexdigest()[:32] if resume_id else None)
         if item["is_dir"]:
             child = _endpoint_join(destination_session, destination_path, item["name"])
-            if destination_session is None:
+            if _destination_exists(destination_session, child):
+                child_info = _endpoint_lstat(destination_session, child)
+                if not stat.S_ISDIR(child_info.st_mode or 0):
+                    raise RemoteAccessError("Refusing to continue into a non-directory staging item")
+            elif destination_session is None:
                 Path(child).mkdir(mode=0o700)
             else:
                 _sftp(destination_session).mkdir(str(child))
             _copy_directory_contents(source_session, source, destination_session,
-                                     child, progress=progress, cancel=cancel)
+                                     child, progress=progress, cancel=cancel,
+                                     resume_id=child_id)
         else:
+            destination = _endpoint_join(destination_session, destination_path,
+                                         item["name"])
+            if _destination_exists(destination_session, destination):
+                completed = _endpoint_lstat(destination_session, destination)
+                if (stat.S_ISREG(completed.st_mode or 0) and
+                        int(completed.st_size or 0) == int(item["size"] or 0)):
+                    continue
+                raise FileExistsError(f"Staged destination conflicts: {item['name']}")
             transfer_entry(source_session, source, destination_session,
-                           destination_path, progress=progress, cancel=cancel)
+                           destination_path, progress=progress, cancel=cancel,
+                           resume_id=child_id)
 
 
 def _remote_exists(sftp: Any, path: str) -> bool:
@@ -1100,7 +1201,8 @@ def download_file(session: "RemoteSession", remote_path: str, local_path: str | 
 class RemoteSession:
     """One authenticated SSH transport shared by its shell and SFTP channels."""
 
-    def __init__(self, client: Any, profile: SSHProfile, tunnel: socket.socket):
+    def __init__(self, client: Any, profile: SSHProfile, tunnel: socket.socket,
+                 *, _lease: "_TransportLease | None" = None):
         self.client = client
         self.profile = profile
         self.tunnel = tunnel
@@ -1108,6 +1210,16 @@ class RemoteSession:
         self.shell = None
         self.closed = False
         self._lock = threading.RLock()
+        self._lease = _lease or _TransportLease(client, tunnel)
+
+    def fork(self) -> "RemoteSession":
+        """Create an independently closable set of SSH channels on this transport."""
+        with self._lock:
+            if self.closed or self._lease.closed:
+                raise RemoteAccessError("SSH connection is closed")
+            self._lease.acquire()
+            return RemoteSession(self.client, self.profile, self.tunnel,
+                                 _lease=self._lease)
 
     def open_shell(self, *, term: str = "xterm-256color", width: int = 80,
                    height: int = 24):
@@ -1132,7 +1244,40 @@ class RemoteSession:
             if self.closed:
                 return
             self.closed = True
-            for resource in (self.shell, self.sftp, self.client, self.tunnel):
+            for resource in (self.shell, self.sftp):
+                try:
+                    if resource is not None:
+                        resource.close()
+                except Exception:
+                    pass
+            self._lease.release()
+
+
+class _TransportLease:
+    """Reference-count the SSH transport while child windows own SFTP channels."""
+
+    def __init__(self, client: Any, tunnel: socket.socket):
+        self.client = client
+        self.tunnel = tunnel
+        self.references = 1
+        self.closed = False
+        self.lock = threading.RLock()
+
+    def acquire(self) -> None:
+        with self.lock:
+            if self.closed:
+                raise RemoteAccessError("SSH connection is closed")
+            self.references += 1
+
+    def release(self) -> None:
+        with self.lock:
+            if self.closed:
+                return
+            self.references -= 1
+            if self.references > 0:
+                return
+            self.closed = True
+            for resource in (self.client, self.tunnel):
                 try:
                     if resource is not None:
                         resource.close()
@@ -1145,7 +1290,7 @@ __all__ = ["SSHProfile", "RemoteAccessError", "ProxyTunnelError",
            "create_local_directory", "create_local_file", "create_remote_directory",
            "create_remote_file", "delete_local", "delete_profile", "delete_remote",
            "download_file", "fingerprint_sha256", "list_local", "list_remote",
-           "entry_type", "load_profiles", "normalize_remote_path", "open_proxy_tunnel",
+           "entry_metadata", "entry_type", "load_profiles", "normalize_remote_path", "open_proxy_tunnel",
            "profile_path", "rename_local",
            "rename_remote", "rename_remote_to", "save_profiles", "transfer_entry",
            "trust_host_key", "upsert_profile", "upload_file"]

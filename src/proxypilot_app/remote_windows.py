@@ -1,6 +1,7 @@
 """Independent two-sided SFTP file manager and one-shell-per-window SSH terminals."""
 from __future__ import annotations
 
+import errno
 import json
 import posixpath
 import queue
@@ -24,18 +25,36 @@ except (ImportError, ValueError):
 from . import remote_access
 
 
+_NETWORK_ERRNOS = {
+    errno.ECONNABORTED, errno.ECONNRESET, errno.EHOSTUNREACH,
+    errno.ENETDOWN, errno.ENETUNREACH, errno.EPIPE, errno.ETIMEDOUT,
+}
+
+
+def _connection_was_lost(error: BaseException) -> bool:
+    if isinstance(error, (EOFError, TimeoutError, socket.timeout, ConnectionError)):
+        return True
+    if isinstance(error, OSError) and error.errno in _NETWORK_ERRNOS:
+        return True
+    return type(error).__name__ in {
+        "SSHException", "ChannelException", "NoValidConnectionsError", "SFTPError",
+    }
+
+
 class SSHConnectionFlow:
     """Connect without blocking GTK and require explicit host-key approval."""
 
     def __init__(self, parent: Gtk.Window, profile: remote_access.SSHProfile,
                  on_connected: Callable[[remote_access.RemoteSession], None],
                  on_status: Callable[[str], None],
-                 on_failed: Callable[[], None] | None = None):
+                 on_failed: Callable[[], None] | None = None,
+                 on_secret: Callable[[str], None] | None = None):
         self.parent = parent
         self.profile = profile
         self.on_connected = on_connected
         self.on_status = on_status
         self.on_failed = on_failed or (lambda: None)
+        self.on_secret = on_secret or (lambda _secret: None)
         self.cancelled = False
 
     def connect(self, secret: str | None = None) -> None:
@@ -61,6 +80,8 @@ class SSHConnectionFlow:
                 session.close()
             return GLib.SOURCE_REMOVE
         if error is None:
+            if secret:
+                self.on_secret(secret)
             self.on_connected(session)
             return GLib.SOURCE_REMOVE
         if isinstance(error, remote_access.UnknownHostKeyError):
@@ -180,9 +201,6 @@ class FilePane(Gtk.Box):
         self.endpoint_selector.set_tooltip_text("Choose local files or a saved SSH profile")
         self.endpoint_selector.connect("notify::selected", self._selection_changed)
         heading.append(self.endpoint_selector)
-        self.connect_button = Gtk.Button(label="Connect")
-        self.connect_button.connect("clicked", self._connect_clicked)
-        heading.append(self.connect_button)
         self.append(heading)
 
         location = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -207,6 +225,10 @@ class FilePane(Gtk.Box):
         pane_click = Gtk.GestureClick.new()
         pane_click.connect("pressed", self.owner._pane_activated, self.side)
         self.file_list.add_controller(pane_click)
+        context_click = Gtk.GestureClick.new()
+        context_click.set_button(Gdk.BUTTON_SECONDARY)
+        context_click.connect("pressed", self.owner._show_context_menu, self.side)
+        self.file_list.add_controller(context_click)
         target = Gtk.DropTarget.new(GObject.TYPE_STRING, Gdk.DragAction.MOVE)
         target.connect("drop", self.owner._drop, self.side)
         self.file_list.add_controller(target)
@@ -244,30 +266,35 @@ class FilePane(Gtk.Box):
             self.flow = None
         self.profile = self.profiles[index - 1] if index > 0 and index <= len(self.profiles) else None
         is_local = self.profile is None
-        self.connect_button.set_label("Local" if is_local else "Connect")
-        self.connect_button.set_sensitive(not is_local)
         self.title_label.set_text("Local machine" if is_local else self.profile.name)
         self.path = str(Path.home()) if is_local else "."
         self.path_entry.set_text(self.path)
-        self.status.set_text("Browse local files." if is_local else "Not connected.")
         if reload:
-            self.refresh()
-
-    def _connect_clicked(self, _button) -> None:
-        if self.session is not None:
-            self.session.close()
-            self.session = None
-            self.connect_button.set_label("Connect")
-            self.status.set_text("Disconnected.")
+            if is_local:
+                self.status.set_text("Browse local files.")
+                self.refresh()
+                return
+            if (self.owner.initial_session is not None and
+                    self.owner.initial_session.profile.profile_id == self.profile.profile_id):
+                try:
+                    self.session = self.owner.initial_session.fork()
+                    self.status.set_text("Connected · SSH host key verified")
+                    self.refresh()
+                    return
+                except Exception:
+                    self.session = None
             self._draw([])
-            return
+            self._start_connect()
+
+    def _start_connect(self) -> None:
         if self.flow is not None or self.profile is None:
             return
-        self.connect_button.set_sensitive(False)
-        self.connect_button.set_label("Connecting…")
+        self.status.set_text(f"Connecting to {self.profile.host}:{self.profile.port}…")
         self.flow = SSHConnectionFlow(self.owner, self.profile,
                                       self._connected, self.status.set_text,
-                                      self._connection_failed)
+                                      self._connection_failed,
+                                      lambda secret: self.owner.passwords.__setitem__(
+                                          self.profile.profile_id, secret))
         self.flow.connect(self.owner.passwords.get(self.profile.profile_id))
 
     def _connected(self, session: remote_access.RemoteSession) -> None:
@@ -276,8 +303,6 @@ class FilePane(Gtk.Box):
             return
         self.flow = None
         self.session = session
-        self.connect_button.set_label("Disconnect")
-        self.connect_button.set_sensitive(True)
         route = "ProxyPilot proxy" if session.profile.use_proxy else "Direct"
         self.status.set_text(f"Connected · {route} · SSH host key verified")
         self.path = "."
@@ -287,8 +312,7 @@ class FilePane(Gtk.Box):
     def _connection_failed(self) -> None:
         self.flow = None
         if not self.closing:
-            self.connect_button.set_label("Connect")
-            self.connect_button.set_sensitive(self.profile is not None)
+            self.status.set_text("Connection failed. Refresh to retry.")
 
     def _path_activated(self, _entry) -> None:
         self.refresh()
@@ -309,7 +333,9 @@ class FilePane(Gtk.Box):
         session = self.session
         if self.profile is not None and session is None:
             self.path = requested
-            self.status.set_text("Connect to this server to browse its files.")
+            if self.flow is None:
+                self.status.set_text("Waiting for the server connection…")
+                self._start_connect()
             self._draw([])
             return
 
@@ -334,6 +360,14 @@ class FilePane(Gtk.Box):
                 generation != self.refresh_generation):
             return GLib.SOURCE_REMOVE
         if error is not None:
+            if (session is not None and self.profile is not None and
+                    _connection_was_lost(error)):
+                session.close()
+                self.session = None
+                self.status.set_text("Connection lost. Reconnecting…")
+                self._start_connect()
+                self._draw([])
+                return GLib.SOURCE_REMOVE
             self.status.set_text(f"Cannot list folder: {type(error).__name__}: {error}")
             self._draw([])
             return GLib.SOURCE_REMOVE
@@ -353,6 +387,7 @@ class FilePane(Gtk.Box):
         self.items = entries
         for item in entries:
             row = Gtk.ListBoxRow()
+            row.add_css_class("file-entry")
             row.item = item
             row.path = (posixpath.join(self.path, item["name"]) if self.session is not None
                         else str(Path(self.path) / item["name"]))
@@ -364,14 +399,16 @@ class FilePane(Gtk.Box):
             row.set_child(label)
             source = Gtk.DragSource.new()
             source.set_actions(Gdk.DragAction.MOVE)
-            source.connect("prepare", self.owner._drag_prepare, self.side, row)
+            source.connect("prepare", self.owner._prepare_drag, self.side, row)
             row.add_controller(source)
             self.file_list.append(row)
 
     def selected(self) -> list[dict[str, Any]]:
         return [{"name": row.item["name"], "path": row.path,
                  "is_dir": row.item["is_dir"],
-                 "is_symlink": row.item["is_symlink"]}
+                 "is_symlink": row.item["is_symlink"],
+                 "size": int(row.item.get("size") or 0),
+                 "mtime": int(row.item.get("mtime") or 0)}
                 for row in self.file_list.get_selected_rows()]
 
     def _row_activated(self, _list, row) -> None:
@@ -393,7 +430,6 @@ class FilePane(Gtk.Box):
 
     def set_busy(self, busy: bool) -> None:
         self.endpoint_selector.set_sensitive(not busy)
-        self.connect_button.set_sensitive(not busy and self.profile is not None)
         self.path_entry.set_sensitive(not busy)
         self.file_list.set_sensitive(not busy)
 
@@ -404,7 +440,8 @@ class RemoteFileManagerWindow(Gtk.Window):
     def __init__(self, application: Gtk.Application, parent: Gtk.Window,
                  profiles: list[remote_access.SSHProfile],
                  initial_profile: remote_access.SSHProfile | None = None, *,
-                 passwords: dict[str, str] | None = None):
+                 passwords: dict[str, str] | None = None,
+                 initial_session: remote_access.RemoteSession | None = None):
         super().__init__(application=application, title="ProxyPilot File Manager")
         self.set_transient_for(parent)
         self.set_default_size(1200, 720)
@@ -415,6 +452,9 @@ class RemoteFileManagerWindow(Gtk.Window):
         self.cancel_event: threading.Event | None = None
         self.clipboard: dict[str, Any] | None = None
         self.passwords = dict(passwords or {})
+        self.initial_session = initial_session
+        self._resume_ids: dict[str, str] = {}
+        self._context_popover: Gtk.Popover | None = None
         self.active_side = "left"
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root.set_margin_top(12)
@@ -442,25 +482,13 @@ class RemoteFileManagerWindow(Gtk.Window):
         root.append(panes)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.copy_button = self._button("Copy", self._copy)
-        self.cut_button = self._button("Cut", self._cut)
-        self.paste_left_button = self._button("Paste to left", lambda *_: self._paste("left"))
-        self.paste_right_button = self._button("Paste to right", lambda *_: self._paste("right"))
-        self.new_file_button = self._button("New file", self._new_file)
-        self.new_folder_button = self._button("New folder", self._new_folder)
-        self.rename_button = self._button("Rename", self._rename)
-        self.delete_button = self._button("Delete…", self._delete)
         self.cancel_button = self._button("Cancel transfer", lambda *_: self.cancel_transfer())
-        for button in (self.copy_button, self.cut_button, self.paste_left_button,
-                       self.paste_right_button, self.new_file_button,
-                       self.new_folder_button, self.rename_button, self.delete_button,
-                       self.cancel_button):
-            actions.append(button)
+        actions.append(self.cancel_button)
         root.append(actions)
         self.progress = Gtk.ProgressBar(show_text=True)
         self.progress.set_text("Ready")
         root.append(self.progress)
-        self.status = Gtk.Label(label="Select one side, then connect or choose local files.",
+        self.status = Gtk.Label(label="Choose a local folder or server profile. Servers connect automatically.",
                                 xalign=0, wrap=True)
         self.status.add_css_class("muted")
         root.append(self.status)
@@ -518,18 +546,81 @@ class RemoteFileManagerWindow(Gtk.Window):
         self._update_buttons()
 
     def _update_buttons(self) -> None:
-        active = self.pane(self.active_side)
-        selected = active.selected()
-        ready = not self.busy and bool(selected)
-        self.copy_button.set_sensitive(ready)
-        self.cut_button.set_sensitive(ready)
-        self.rename_button.set_sensitive(ready and len(selected) == 1)
-        self.delete_button.set_sensitive(ready)
-        self.paste_left_button.set_sensitive(not self.busy and self.clipboard is not None)
-        self.paste_right_button.set_sensitive(not self.busy and self.clipboard is not None)
-        self.new_file_button.set_sensitive(not self.busy)
-        self.new_folder_button.set_sensitive(not self.busy)
         self.cancel_button.set_sensitive(self.busy and self.cancel_event is not None)
+
+    def _show_context_menu(self, gesture, _presses, x: float, y: float,
+                           side: str) -> None:
+        pane = self.pane(side)
+        self.active_side = side
+        row = pane.file_list.get_row_at_y(int(y))
+        if row is not None and row not in pane.file_list.get_selected_rows():
+            pane.file_list.unselect_all()
+            pane.file_list.select_row(row)
+        self._update_buttons()
+        selected = pane.selected()
+        menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+
+        def add_action(label: str, action: str) -> None:
+            button = Gtk.Button(has_frame=False)
+            button.set_child(Gtk.Label(label=label, xalign=0, hexpand=True))
+            button.connect("clicked", self._context_action, action, side)
+            menu.append(button)
+
+        if row is not None and row.item["is_dir"]:
+            add_action("Open", "open")
+        if selected:
+            add_action("Copy", "copy")
+            add_action("Cut", "cut")
+        if self.clipboard is not None:
+            add_action("Paste here", "paste")
+        menu.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        add_action("New file", "new-file")
+        add_action("New folder", "new-folder")
+        if len(selected) == 1:
+            add_action("Rename", "rename")
+        if selected:
+            add_action("Delete…", "delete")
+
+        popover = Gtk.Popover()
+        if self._context_popover is not None:
+            self._context_popover.popdown()
+        popover.set_child(menu)
+        popover.set_parent(pane.file_list)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.connect("closed", self._context_menu_closed)
+        self._context_popover = popover
+        popover.popup()
+
+    def _context_menu_closed(self, popover) -> None:
+        if self._context_popover is popover:
+            self._context_popover = None
+        if popover.get_parent() is not None:
+            popover.unparent()
+
+    def _context_action(self, button, action: str, side: str) -> None:
+        popover = button.get_ancestor(Gtk.Popover)
+        if popover is not None:
+            popover.popdown()
+        self.active_side = side
+        pane = self.pane(side)
+        if action == "open":
+            row = pane.file_list.get_selected_row()
+            if row is not None:
+                pane._row_activated(pane.file_list, row)
+        elif action == "copy":
+            self._copy(None)
+        elif action == "cut":
+            self._cut(None)
+        elif action == "paste":
+            self._paste(side)
+        elif action == "new-file":
+            self._new_file(None)
+        elif action == "new-folder":
+            self._new_folder(None)
+        elif action == "rename":
+            self._rename(None)
+        elif action == "delete":
+            self._delete(None)
 
     def _copy(self, _button) -> None:
         self._set_clipboard(move=False)
@@ -571,7 +662,9 @@ class RemoteFileManagerWindow(Gtk.Window):
             selected_rows = [row]
         items = [{"path": candidate.path, "name": candidate.item["name"],
                   "is_dir": candidate.item["is_dir"],
-                  "is_symlink": candidate.item["is_symlink"]}
+                  "is_symlink": candidate.item["is_symlink"],
+                  "size": int(candidate.item.get("size") or 0),
+                  "mtime": int(candidate.item.get("mtime") or 0)}
                  for candidate in selected_rows]
         payload = json.dumps({"manager": self.manager_id, "side": side,
                               "signature": pane.signature,
@@ -603,14 +696,15 @@ class RemoteFileManagerWindow(Gtk.Window):
         source = self.pane(source_side)
         destination = self.pane(destination_side)
         if source.profile is not None and source.session is None:
-            self.status.set_text(f"Connect the {source_side} server first.")
+            self.status.set_text(f"Waiting for the {source_side} server connection.")
             return
         if destination.profile is not None and destination.session is None:
-            self.status.set_text(f"Connect the {destination_side} server first.")
+            self.status.set_text(f"Waiting for the {destination_side} server connection.")
             return
         source_session = source.session
         destination_session = destination.session
         destination_directory = destination.path
+        sessions = {"left": self.left.session, "right": self.right.session}
         cancel = threading.Event()
         self.cancel_event = cancel
         self.busy = True
@@ -621,43 +715,67 @@ class RemoteFileManagerWindow(Gtk.Window):
         self.progress.set_text("Checking destination…")
 
         def preflight():
-            try:
-                conflicts = []
-                for item in items:
-                    if item["is_symlink"]:
-                        raise remote_access.RemoteAccessError(
-                            f"Symbolic links cannot be copied: {item['name']}")
-                    path = (posixpath.join(destination_directory, item["name"])
-                            if destination_session is not None
-                            else str(Path(destination_directory) / item["name"]))
-                    kind = remote_access.entry_type(destination_session, path)
-                    if kind == "symlink" or kind == "special":
-                        raise remote_access.RemoteAccessError(
-                            f"Destination is not a regular file: {item['name']}")
-                    if kind == "directory":
-                        raise FileExistsError(
-                            f"Folder already exists: {item['name']}. Folder merging is disabled.")
-                    if kind == "file":
-                        if item["is_dir"]:
+            conflicts = []
+            error = None
+            for attempt in range(4):
+                try:
+                    conflicts = []
+                    current_source = sessions[source_side]
+                    current_destination = sessions[destination_side]
+                    for item in items:
+                        if item["is_symlink"]:
+                            raise remote_access.RemoteAccessError(
+                                f"Symbolic links cannot be copied: {item['name']}")
+                        source_meta = remote_access.entry_metadata(
+                            current_source, item["path"])
+                        if source_meta["is_dir"] != item["is_dir"]:
+                            raise remote_access.RemoteAccessError(
+                                f"Source type changed while selected: {item['name']}")
+                        item["size"] = source_meta["size"]
+                        item["mtime"] = source_meta["mtime"]
+                        path = (posixpath.join(destination_directory, item["name"])
+                                if current_destination is not None
+                                else str(Path(destination_directory) / item["name"]))
+                        kind = remote_access.entry_type(current_destination, path)
+                        if kind == "symlink" or kind == "special":
+                            raise remote_access.RemoteAccessError(
+                                f"Destination is not a regular file: {item['name']}")
+                        if kind == "directory":
                             raise FileExistsError(
-                                f"A file already uses the folder name {item['name']}.")
-                        conflicts.append(item["name"])
-                GLib.idle_add(self._preflight_done, source_side, items, destination_side,
-                              move, clear_clipboard, conflicts, None, cancel)
-            except Exception as exc:
-                GLib.idle_add(self._preflight_done, source_side, items, destination_side,
-                              move, clear_clipboard, [], exc, cancel)
+                                f"Folder already exists: {item['name']}. Folder merging is disabled.")
+                        if kind == "file":
+                            if item["is_dir"]:
+                                raise FileExistsError(
+                                    f"A file already uses the folder name {item['name']}.")
+                            conflicts.append(item["name"])
+                    error = None
+                    break
+                except Exception as exc:
+                    error = exc
+                    remote_sides = [side for side in {source_side, destination_side}
+                                    if self.pane(side).profile is not None]
+                    if (attempt >= 3 or cancel.is_set() or
+                            not _connection_was_lost(exc) or not remote_sides):
+                        break
+                    try:
+                        self._reconnect_sessions(
+                            sessions, remote_sides, attempt + 1, cancel)
+                    except Exception as reconnect_error:
+                        error = reconnect_error
+                        break
+            GLib.idle_add(self._preflight_done, source_side, items, destination_side,
+                          move, clear_clipboard, conflicts, error, cancel, sessions)
 
         threading.Thread(target=preflight, name="proxypilot-transfer-preflight",
                          daemon=True).start()
 
     def _preflight_done(self, source_side, items, destination_side, move,
-                        clear_clipboard, conflicts, error, cancel) -> bool:
+                        clear_clipboard, conflicts, error, cancel, sessions) -> bool:
         if self.closing:
-            self._transfer_done(error or InterruptedError("Window closed"), None)
+            self._transfer_done(error or InterruptedError("Window closed"), None, sessions)
             return GLib.SOURCE_REMOVE
         if error is not None:
-            self._transfer_done(error, None)
+            self._transfer_done(error, None, sessions)
             return GLib.SOURCE_REMOVE
         if conflicts:
             operation = "move" if move else "copy"
@@ -672,68 +790,163 @@ class RemoteFileManagerWindow(Gtk.Window):
                 f"{shown}\nEach existing file is replaced atomically after the new copy completes.")
             dialog.connect("response", self._overwrite_response,
                            source_side, items, destination_side, move,
-                           clear_clipboard, conflicts, cancel)
+                           clear_clipboard, conflicts, cancel, sessions)
             dialog.present()
             return GLib.SOURCE_REMOVE
         self._run_transfer(source_side, items, destination_side, move,
-                           clear_clipboard, [], cancel)
+                           clear_clipboard, [], cancel, sessions)
         return GLib.SOURCE_REMOVE
 
     def _overwrite_response(self, dialog, response, source_side, items,
                             destination_side, move, clear_clipboard, conflicts,
-                            cancel) -> None:
+                            cancel, sessions) -> None:
         dialog.destroy()
         if response != Gtk.ResponseType.OK:
-            self._transfer_done(InterruptedError("Transfer cancelled"), None)
+            self._transfer_done(InterruptedError("Transfer cancelled"), None, sessions)
             return
         self._run_transfer(source_side, items, destination_side, move,
-                           clear_clipboard, conflicts, cancel)
+                           clear_clipboard, conflicts, cancel, sessions)
 
     def _run_transfer(self, source_side: str, items: list[dict[str, Any]],
                       destination_side: str, move: bool, clear_clipboard: bool,
-                      overwrite_names: list[str], cancel: threading.Event) -> None:
-        source = self.pane(source_side)
+                      overwrite_names: list[str], cancel: threading.Event,
+                      sessions: dict[str, remote_access.RemoteSession | None]) -> None:
         destination = self.pane(destination_side)
-        source_session = source.session
-        destination_session = destination.session
         destination_directory = destination.path
         self.progress.set_text("Transferring…")
 
-        def progress(transferred: int, total: int) -> None:
+        def progress(transferred: int, total: int, item_number: int, item_name: str) -> None:
             if cancel.is_set():
                 raise InterruptedError("Transfer cancelled")
             fraction = min(1.0, transferred / total) if total else 1.0
-            GLib.idle_add(self._progress_changed, fraction, transferred, total)
+            GLib.idle_add(self._progress_changed, fraction, transferred, total,
+                          item_number, len(items), item_name)
 
         def worker():
-            try:
-                for item in items:
-                    if cancel.is_set():
-                        raise InterruptedError("Transfer cancelled")
-                    remote_access.transfer_entry(
-                        source_session, item["path"], destination_session,
-                        destination_directory, move=move,
-                        overwrite=item["name"] in overwrite_names,
-                        progress=progress, cancel=cancel)
-                result = None
-            except Exception as exc:
-                result = exc
+            result = None
+            completed: set[int] = set()
+            for attempt in range(4):
+                try:
+                    for index, item in enumerate(items):
+                        if index in completed:
+                            continue
+                        if cancel.is_set():
+                            raise InterruptedError("Transfer cancelled")
+                        source_session = sessions[source_side]
+                        destination_session = sessions[destination_side]
+                        resume_key = self._resume_key(
+                            source_side, item["path"], destination_side,
+                            destination_directory, item)
+                        resume_id = self._resume_ids.setdefault(resume_key, uuid.uuid4().hex)
+
+                        def item_progress(done: int, total: int,
+                                          number=index + 1, name=item["name"]) -> None:
+                            progress(done, total, number, name)
+
+                        remote_access.transfer_entry(
+                            source_session, item["path"], destination_session,
+                            destination_directory, move=move,
+                            overwrite=item["name"] in overwrite_names,
+                            progress=item_progress, cancel=cancel,
+                            resume_id=resume_id)
+                        completed.add(index)
+                        self._resume_ids.pop(resume_key, None)
+                    result = None
+                    break
+                except Exception as exc:
+                    result = exc
+                    remote_sides = [side for side in {source_side, destination_side}
+                                    if self.pane(side).profile is not None]
+                    if (attempt >= 3 or cancel.is_set() or
+                            not _connection_was_lost(exc) or not remote_sides):
+                        break
+                    try:
+                        self._reconnect_sessions(sessions, remote_sides, attempt + 1, cancel)
+                        for index, item in enumerate(items):
+                            if index in completed:
+                                continue
+                            current = remote_access.entry_metadata(
+                                sessions[source_side], item["path"])
+                            if (current["size"], current["mtime"], current["is_dir"]) != (
+                                    item.get("size"), item.get("mtime"), item["is_dir"]):
+                                raise remote_access.RemoteAccessError(
+                                    f"Source changed during transfer; resume stopped: {item['name']}")
+                        result = None
+                    except Exception as reconnect_error:
+                        result = reconnect_error
+                        break
             GLib.idle_add(self._transfer_done, result,
-                          clear_clipboard and move)
+                          clear_clipboard and move, sessions)
 
         threading.Thread(target=worker, name="proxypilot-two-pane-transfer",
                          daemon=True).start()
 
-    def _progress_changed(self, fraction: float, transferred: int, total: int) -> bool:
+    def _resume_key(self, source_side: str, source_path: str | Path,
+                    destination_side: str, destination_path: str,
+                    item: dict[str, Any]) -> str:
+        source = self.pane(source_side)
+        destination = self.pane(destination_side)
+        return json.dumps([source.signature, str(source_path), destination.signature,
+                           str(destination_path), item["name"], item.get("size"),
+                           item.get("mtime")], separators=(",", ":"))
+
+    def _reconnect_sessions(self, sessions, sides, attempt, cancel) -> None:
+        delay = min(4, 2 ** (attempt - 1))
+        GLib.idle_add(self._set_transfer_status,
+                      f"Connection lost. Reconnecting and resuming transfer ({attempt}/3)…")
+        if cancel.wait(delay):
+            raise InterruptedError("Transfer cancelled")
+        for side in sides:
+            pane = self.pane(side)
+            if pane.profile is None:
+                continue
+            previous = sessions.get(side)
+            try:
+                replacement = remote_access.connect_profile(
+                    pane.profile,
+                    password=self.passwords.get(pane.profile.profile_id),
+                    timeout=10)
+            except Exception:
+                raise
+            sessions[side] = replacement
+            if previous is not None:
+                previous.close()
+
+    def _set_transfer_status(self, text: str) -> bool:
+        if not self.closing:
+            self.status.set_text(text)
+            self.progress.set_text("Reconnecting…")
+        return GLib.SOURCE_REMOVE
+
+    def _progress_changed(self, fraction: float, transferred: int, total: int,
+                          item_number: int, item_count: int, item_name: str) -> bool:
         if self.closing:
             return GLib.SOURCE_REMOVE
         self.progress.set_fraction(fraction)
-        self.progress.set_text(f"{transferred:,} / {total:,} bytes")
+        percent = round(fraction * 100)
+        self.progress.set_text(
+            f"{percent}% · {transferred:,} / {total:,} bytes · {item_number}/{item_count} · {item_name}")
         return GLib.SOURCE_REMOVE
 
-    def _transfer_done(self, error, clear_clipboard) -> bool:
+    def _transfer_done(self, error, clear_clipboard, sessions=None) -> bool:
+        if self.closing:
+            if sessions is not None:
+                for side in ("left", "right"):
+                    replacement = sessions.get(side)
+                    if replacement is not None and replacement is not self.pane(side).session:
+                        replacement.close()
+            return GLib.SOURCE_REMOVE
         self.busy = False
         self.cancel_event = None
+        if sessions is not None:
+            for side in ("left", "right"):
+                pane = self.pane(side)
+                replacement = sessions.get(side)
+                if replacement is pane.session:
+                    continue
+                if pane.session is not None:
+                    pane.session.close()
+                pane.session = replacement
         self.left.set_busy(False)
         self.right.set_busy(False)
         if clear_clipboard:
@@ -748,7 +961,10 @@ class RemoteFileManagerWindow(Gtk.Window):
                 self.right.refresh()
             else:
                 self.status.set_text(f"Transfer stopped: {type(error).__name__}: {error}")
-                self.progress.set_text("Stopped or failed")
+                self.progress.set_text("Stopped or failed · retry to resume")
+                for pane in (self.left, self.right):
+                    if pane.profile is not None and pane.session is None:
+                        pane.status.set_text("Disconnected. Return to the SSH / SFTP page to reconnect.")
         return GLib.SOURCE_REMOVE
 
     def _new_file(self, _button) -> None:
@@ -789,7 +1005,7 @@ class RemoteFileManagerWindow(Gtk.Window):
             return
         pane = self.pane(self.active_side)
         if pane.profile is not None and pane.session is None:
-            self.status.set_text("Connect this server before creating files.")
+            self.status.set_text("Wait for the server connection before creating files.")
             return
 
         def worker():
@@ -822,7 +1038,7 @@ class RemoteFileManagerWindow(Gtk.Window):
     def _rename_item(self, name: str, _is_directory, item) -> None:
         pane = self.pane(self.active_side)
         if pane.profile is not None and pane.session is None:
-            self.status.set_text("Connect this server before renaming files.")
+            self.status.set_text("Wait for the server connection before renaming files.")
             return
 
         def worker():
@@ -867,7 +1083,7 @@ class RemoteFileManagerWindow(Gtk.Window):
             return
         pane = self.pane(side)
         if pane.profile is not None and pane.session is None:
-            self.status.set_text("Connect this server before deleting files.")
+            self.status.set_text("Wait for the server connection before deleting files.")
             return
 
         def worker():
@@ -903,6 +1119,8 @@ class RemoteFileManagerWindow(Gtk.Window):
     def _close_request(self, *_args) -> bool:
         self.closing = True
         self.cancel_transfer()
+        if self._context_popover is not None:
+            self._context_popover.popdown()
         self.left.close()
         self.right.close()
         self.passwords.clear()
@@ -942,9 +1160,6 @@ class RemoteTerminalWindow(Gtk.Window):
                                 hexpand=True, wrap=True)
         self.status.add_css_class("muted")
         heading.append(self.status)
-        self.reconnect_button = Gtk.Button(label="Reconnect")
-        self.reconnect_button.connect("clicked", self._reconnect)
-        heading.append(self.reconnect_button)
         root.append(heading)
         if Vte is None:
             root.append(Gtk.Label(
@@ -952,7 +1167,6 @@ class RemoteTerminalWindow(Gtk.Window):
                 xalign=0, wrap=True))
             self.terminal = None
             self.status.set_text("Terminal unavailable: GTK 4 VTE is not installed.")
-            self.reconnect_button.set_sensitive(False)
         else:
             self.terminal = Vte.Terminal()
             self.terminal.set_scrollback_lines(10000)
@@ -970,7 +1184,6 @@ class RemoteTerminalWindow(Gtk.Window):
             return
         if self.flow is not None:
             return
-        self.reconnect_button.set_sensitive(False)
         self.flow = SSHConnectionFlow(self, self.profile, self._connected,
                                       self.status.set_text, self._connection_failed)
         password = self.password
@@ -980,7 +1193,7 @@ class RemoteTerminalWindow(Gtk.Window):
     def _connection_failed(self) -> None:
         self.flow = None
         if not self.closing:
-            self.reconnect_button.set_sensitive(True)
+            self.status.set_text("Connection failed. Return to the SSH / SFTP page to retry.")
 
     def _connected(self, session: remote_access.RemoteSession) -> None:
         if self.closing:
@@ -1013,7 +1226,6 @@ class RemoteTerminalWindow(Gtk.Window):
             if channel is not None:
                 channel.close()
             return GLib.SOURCE_REMOVE
-        self.reconnect_button.set_sensitive(True)
         if error is not None:
             self.status.set_text(f"Could not open shell: {type(error).__name__}: {error}")
             return GLib.SOURCE_REMOVE
@@ -1091,23 +1303,6 @@ class RemoteTerminalWindow(Gtk.Window):
         if self.session is session and not self.closing:
             self.status.set_text(message)
         return GLib.SOURCE_REMOVE
-
-    def _reconnect(self, _button) -> None:
-        if self.session is not None:
-            self.session.close()
-            self.session = None
-        if self._size_source is not None:
-            try:
-                GLib.source_remove(self._size_source)
-            except Exception:
-                pass
-            self._size_source = None
-        while True:
-            try:
-                self.input_queue.get_nowait()
-            except queue.Empty:
-                break
-        self._connect()
 
     def _close_request(self, *_args) -> bool:
         self.closing = True
