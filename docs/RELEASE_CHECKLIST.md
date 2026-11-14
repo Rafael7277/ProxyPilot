@@ -17,4 +17,4 @@ Before a stable `v1.0.0` tag:
 - [x] Public-tree check covers tracked and unignored untracked files; local configuration and the private audit remain ignored.
 - [x] License, maintainer metadata, and repository URL are configured.
 - [x] Private vulnerability reporting is enabled on the GitHub repository.
-- [x] Initial public source push and CI completed successfully. The first `1.0.0-alpha.1` signed artifact build and publication are the remaining release steps.
+- [x] Initial public source push and CI completed successfully; `1.0.0-alpha.3` artifacts were built, provenance-verified, published, and downloaded checksummed. The `alpha.1` release with a filename-mismatched checksum manifest was moved to Draft.
