@@ -4,6 +4,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 import proxypilot as core
@@ -108,6 +109,26 @@ class ProxyHTTPTests(unittest.TestCase):
         finally:
             bridge.shutdown();bridge.server_close();direct.close()
             if old:core.HOME,core.CFG_DIR,core.CFG_FILE=old
+
+    def test_force_proxy_overrides_bypass_and_never_opens_direct_socket(self):
+        expected=object()
+        cfg={'bypass_hosts':['build.example.test'],'allow_direct_fallback':True}
+        with patch.object(core,'connect_upstream',return_value=expected) as upstream, \
+             patch.object(core.socket,'create_connection',side_effect=AssertionError('direct route leaked')) as direct:
+            sock,route=core.destination_with_route('build.example.test',22,'proxy',cfg,force_proxy=True)
+        self.assertIs(sock,expected)
+        self.assertEqual(route,'proxy')
+        upstream.assert_called_once_with('build.example.test',22,cfg)
+        direct.assert_not_called()
+
+    def test_force_proxy_failure_does_not_fall_back_to_direct(self):
+        cfg={'bypass_hosts':['build.example.test'],'allow_direct_fallback':True}
+        with patch.object(core,'connect_upstream',side_effect=OSError('upstream down')) as upstream, \
+             patch.object(core.socket,'create_connection',side_effect=AssertionError('direct route leaked')) as direct:
+            with self.assertRaisesRegex(OSError,'upstream down'):
+                core.destination_with_route('build.example.test',22,'proxy',cfg,force_proxy=True)
+        upstream.assert_called_once()
+        direct.assert_not_called()
 
     def test_http_forward_via_auto_direct_fallback(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),SimpleHandler)

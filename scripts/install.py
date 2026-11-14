@@ -19,7 +19,8 @@ ROOT=Path(__file__).resolve().parents[1]
 PY_MODULES=("proxypilot.py","manager.py","desktop.py","appicons.py","traffic.py",
             "socketwatch.py","netobserve.py","appstatus.py","checkui.py","diagnostics.py")
 PACKAGE_FILES=tuple((Path("src/proxypilot_app")/name) for name in
-                    ("__init__.py","__main__.py","api.py","cli.py","gtk_ui.py","updates.py","uninstall.py"))
+                    ("__init__.py","__main__.py","api.py","cli.py","gtk_ui.py",
+                     "updates.py","uninstall.py","remote_access.py","remote_ui.py"))
 
 
 def desktop_quote(value: str) -> str:
@@ -163,13 +164,28 @@ def call_systemctl(systemctl: str, *args: str, check: bool = True) -> subprocess
     return result
 
 
+def optional_ssh_runtime_gaps(python: str) -> list[str]:
+    gaps=[]
+    paramiko=subprocess.run([python,"-c","import paramiko"],capture_output=True,text=True)
+    if paramiko.returncode:
+        gaps.append("SSH/SFTP needs Paramiko (python3-paramiko on Ubuntu/Debian).")
+    vte=subprocess.run([python,"-c",
+        "import gi; gi.require_version('Vte','3.91'); from gi.repository import Vte"],
+        capture_output=True,text=True)
+    if vte.returncode:
+        gaps.append("The embedded SSH terminal needs GTK 4 VTE (gir1.2-vte-3.91); SFTP remains available without it.")
+    return gaps
+
+
 def install(args: argparse.Namespace) -> int:
     paths=user_paths();python=str(Path(sys.executable).resolve())
+    ssh_runtime_gaps=[]
     if not args.cli_only:
         gtk=subprocess.run([python,"-c","import gi; gi.require_version('Gtk','4.0'); from gi.repository import Gtk"],
                            capture_output=True,text=True)
         if gtk.returncode:
             raise RuntimeError("GTK 4 bindings are unavailable for this Python. Install python3-gi and gir1.2-gtk-4.0, or use --cli-only.")
+        ssh_runtime_gaps=optional_ssh_runtime_gaps(python)
     files=generated_files(paths,python,args.cli_only)
     collisions=[]
     for path,(_,_,kind) in files.items():
@@ -187,6 +203,7 @@ def install(args: argparse.Namespace) -> int:
     print(f"  user unit: {paths['units']/'proxypilot.service'}")
     if not args.cli_only:print(f"  desktop entry: {paths['apps']/'proxypilot.desktop'}")
     print("  existing ProxyPilot-owned files will be backed up; unrelated app and proxy settings are untouched")
+    for gap in ssh_runtime_gaps:print(f"  feature dependency: {gap}")
     if args.dry_run:return 0
     if not args.yes and not args.no_start:
         if not sys.stdin.isatty():raise RuntimeError("Use --yes for a non-interactive installation.")
@@ -234,6 +251,7 @@ def install(args: argparse.Namespace) -> int:
     print("ProxyPilot installed. Unrelated desktop apps, user services, proxy settings and environment files were not changed.")
     print("For headless administration, add ~/.local/bin to PATH and run: proxypilot status")
     print("AUTO direct fallback remains a configurable policy; use Proxy Only to fail closed through the bridge.")
+    for gap in ssh_runtime_gaps:print(f"Feature dependency: {gap}")
     return 0
 
 

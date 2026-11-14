@@ -78,7 +78,7 @@ jobs:
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 xvfb dbus-x11 dpkg-dev python3-pip python3-setuptools python3-wheel python3-venv
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 python3-paramiko gir1.2-vte-3.91 xvfb dbus-x11 dpkg-dev python3-pip python3-setuptools python3-wheel python3-venv
       - name: Run release checks and build artifacts
         env:
           RELEASE_TAG: ${{ needs.release-pr.outputs.tag_name }}

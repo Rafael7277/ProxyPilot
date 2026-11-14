@@ -12,6 +12,8 @@
 - Reports the requested policy, effective launcher/service configuration, observed connections, and verification result separately.
 - Includes a command-line interface suitable for local terminals and SSH sessions without `DISPLAY`.
 - Includes a GTK 4 desktop client that uses the same application API as the CLI.
+- Includes an SSH workspace with saved connection profiles, strict SSH host-key verification, SFTP browsing/transfers, and an interactive server shell.
+- Can route an SSH connection through the ProxyPilot proxy-only bridge. A failed proxy tunnel stops the connection instead of falling back to a direct route.
 - Inspects same-user Linux processes, TCP sockets, GNOME settings, and systemd user environment without root.
 - Preserves legacy ProxyPilot JSON configuration and the existing `proxypilot.py serve` entry point.
 
@@ -23,11 +25,15 @@ Process and socket attribution is best-effort and limited to information visible
 
 The system-proxy adapter currently manages GNOME GSettings and the systemd user environment. Other desktop environments are not yet declared supported for system-proxy changes.
 
+SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; SFTP remains available without VTE.
+
 ## Requirements
 
 - Linux with Python 3.11 or newer.
 - systemd user manager for the background bridge service.
 - GTK 4 and PyGObject for the graphical client (`python3-gi` and `gir1.2-gtk-4.0` on Debian-family distributions).
+- Paramiko for SSH and SFTP (`python3-paramiko` on Debian-family distributions).
+- GTK 4 VTE for the embedded terminal (`gir1.2-vte-3.91` where the GTK 4 build is available).
 - An optional SOCKS5 service such as Xray.
 
 Headless users can install the CLI and service without GTK:
@@ -57,6 +63,14 @@ sudo apt install "$release_dir"/proxypilot_*_amd64.deb
 The Debian package installs ProxyPilot for all users; its user service is not enabled automatically. To install only for your account without root, use the source installer below.
 
 ### Install from source for your account
+
+On Ubuntu/Debian, install the SSH and embedded-terminal runtime dependencies first:
+
+```bash
+sudo apt install python3-paramiko gir1.2-vte-3.91
+```
+
+The GUI also requires GTK 4 and PyGObject. Package names can differ on other distributions. The user-local installer does not invoke `sudo` or install operating-system packages.
 
 ```bash
 git clone https://github.com/Rafael7277/ProxyPilot.git
@@ -120,7 +134,7 @@ Launch with:
 proxypilot-gui
 ```
 
-The GTK client contains Dashboard, Applications, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. Scans run off the UI thread. Changes to app or system routes require a confirmation dialog.
+The GTK client contains Dashboard, Applications, SSH / SFTP, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. The SSH workspace offers local and remote file panes, progress-aware single-file transfers, overwrite confirmation, and a remote PTY shell. Network and file operations run off the UI thread. Changes to app or system routes require a confirmation dialog.
 
 ## Configuration and migration
 

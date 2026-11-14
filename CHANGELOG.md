@@ -32,8 +32,20 @@ Changes are tracked using Semantic Versioning. Release notes are reviewed before
 
 ## [Unreleased]
 
+### Added
+
+- GTK SSH workspace with saved profiles, strict host-key review, paired local/remote SFTP panes, progress-aware uploads/downloads, safe rename/delete actions, and an interactive remote shell.
+- Per-connection ProxyPilot routing for SSH, SFTP, and shell channels. The strict CONNECT route ignores bypass rules and never falls back to a direct connection.
+- In-process tests for SSH key verification, shell transport, forced proxy routing, SFTP transfers, overwrite behavior, and safe remote file operations.
+
+### Security
+
+- Keep SSH passwords out of saved profiles, reject unknown server keys until explicit fingerprint review, and store accepted host keys in a private per-user file.
+- Disable the SSH encrypt-then-MAC and CBC algorithm pair on Paramiko builds older than 3.4 as a Terrapin mitigation.
+
 ### Changed
 
+- Add Paramiko and GTK 4 VTE runtime dependencies to project metadata and Debian packaging.
 - Prepare MIT-licensed source and `1.0.0-alpha.1` GitHub release artifacts.
 
 ## [1.0.0-alpha.1] — 2026-11-14

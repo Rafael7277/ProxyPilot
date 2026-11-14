@@ -115,7 +115,7 @@ def _make_deb(output: Path, release_version: str, arch: str, maintainer: str) ->
         debian=root/"DEBIAN";debian.mkdir()
         control=(f"Package: proxypilot\nVersion: {debian_version}\nArchitecture: {arch}\n"
                  f"Maintainer: {maintainer}\nSection: net\nPriority: optional\n"
-                 "Depends: python3 (>= 3.11), python3-gi, gir1.2-gtk-4.0\n"
+                 "Depends: python3 (>= 3.11), python3-gi, gir1.2-gtk-4.0, python3-paramiko, gir1.2-vte-3.91\n"
                  "Description: Linux proxy manager for proxy-aware apps\n"
                  " GTK desktop and SSH-capable CLI using a local HTTP-to-SOCKS5 bridge.\n")
         (debian/"control").write_text(control)
