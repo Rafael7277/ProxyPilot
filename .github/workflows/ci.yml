@@ -66,7 +66,7 @@ jobs:
       - name: Build distributable artifacts
         run: |
           python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"
-          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' wheel
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' 'packaging>=24.2' wheel
           "$RUNNER_TEMP/proxypilot-builder/bin/python" scripts/build_release.py --output "$RUNNER_TEMP/proxypilot-release"
 
   codeql:

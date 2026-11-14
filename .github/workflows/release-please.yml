@@ -89,7 +89,7 @@ jobs:
           /usr/bin/python3 scripts/security_review.py
           version="${RELEASE_TAG#v}"
           python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"
-          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' wheel
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' 'packaging>=24.2' wheel
           "$RUNNER_TEMP/proxypilot-builder/bin/python" scripts/build_release.py --version "$version" --output dist
           (cd dist && sha256sum --check SHA256SUMS)
       - name: Attest release artifacts
