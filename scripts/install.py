@@ -20,7 +20,8 @@ PY_MODULES=("proxypilot.py","manager.py","desktop.py","appicons.py","traffic.py"
             "socketwatch.py","netobserve.py","appstatus.py","checkui.py","diagnostics.py")
 PACKAGE_FILES=tuple((Path("src/proxypilot_app")/name) for name in
                     ("__init__.py","__main__.py","api.py","cli.py","gtk_ui.py",
-                     "updates.py","uninstall.py","remote_access.py","remote_ui.py"))
+                     "updates.py","uninstall.py","remote_access.py","remote_ui.py",
+                     "remote_windows.py"))
 
 
 def desktop_quote(value: str) -> str:

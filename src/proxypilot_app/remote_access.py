@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import fcntl
 import hashlib
 import hmac
@@ -13,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import secrets
+import shutil
 import socket
 import stat
 import tempfile
@@ -507,6 +509,12 @@ def list_remote(session: "RemoteSession", path: str) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (not item["is_dir"], item["name"].casefold()))
 
 
+def normalize_remote_path(session: "RemoteSession", path: str) -> str:
+    if "\x00" in path:
+        raise ValueError("Remote path contains a NUL byte")
+    return str(_sftp(session).normalize(path))
+
+
 def _remote_child(path: str, name: str) -> str:
     if (not name or name in (".", "..") or "/" in name or "\\" in name or
             "\x00" in name or any(ord(char) < 32 for char in name)):
@@ -561,9 +569,419 @@ def list_local(path: str | Path) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (not item["is_dir"], item["name"].casefold()))
 
 
+def _validate_name(name: str) -> str:
+    if (not isinstance(name, str) or not name or name in (".", "..") or
+            "/" in name or "\\" in name or "\x00" in name or
+            any(ord(char) < 32 for char in name)):
+        raise ValueError("Name must be a single safe path component")
+    return name
+
+
+def _local_directory(path: str | Path) -> Path:
+    directory = Path(path).expanduser().resolve(strict=True)
+    if not directory.is_dir():
+        raise ValueError("Local path is not a directory")
+    return directory
+
+
+def create_local_file(directory: str | Path, name: str) -> Path:
+    parent = _local_directory(directory)
+    destination = parent / _validate_name(name)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(destination, flags, 0o600)
+    os.close(fd)
+    return destination
+
+
+def create_local_directory(directory: str | Path, name: str) -> Path:
+    parent = _local_directory(directory)
+    destination = parent / _validate_name(name)
+    destination.mkdir(mode=0o700)
+    return destination
+
+
+def create_remote_file(session: "RemoteSession", directory: str, name: str) -> str:
+    path = _remote_child(directory, _validate_name(name))
+    # Exclusive creation avoids truncating an existing file.
+    with _sftp(session).open(path, "x"):
+        pass
+    return path
+
+
+def rename_local(path: str | Path, new_name: str) -> Path:
+    source = Path(path).expanduser()
+    if source.is_symlink():
+        raise RemoteAccessError("Refusing to rename a symbolic link")
+    source = source.resolve(strict=True)
+    if source.name in ("", ".", ".."):
+        raise ValueError("Refusing to rename a filesystem root")
+    destination = source.parent / _validate_name(new_name)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError("Destination already exists")
+    os.rename(source, destination)
+    return destination
+
+
+def delete_local(path: str | Path, *, is_dir: bool = False) -> None:
+    source = Path(path).expanduser()
+    if source.is_symlink():
+        raise RemoteAccessError("Refusing to delete a symbolic link")
+    source = source.resolve(strict=True)
+    if source.name in ("", ".", ".."):
+        raise ValueError("Refusing to delete a filesystem root")
+    if is_dir:
+        source.rmdir()  # Deliberately non-recursive; only empty folders are removed.
+    else:
+        if not source.is_file():
+            raise ValueError("Selected local item is not a regular file")
+        source.unlink()
+
+
+def rename_remote_to(session: "RemoteSession", source: str,
+                     destination: str) -> str:
+    source_path = PurePosixPath(source)
+    if source_path.name in ("", ".", ".."):
+        raise ValueError("Refusing to rename a remote root directory")
+    if not destination or "\x00" in destination:
+        raise ValueError("Remote destination path is invalid")
+    sftp = _sftp(session)
+    if _remote_exists(sftp, destination):
+        raise FileExistsError("Remote destination already exists")
+    sftp.rename(source, destination)
+    return destination
+
+
+def _endpoint_lstat(session: "RemoteSession | None", path: str | Path):
+    if session is None:
+        requested = Path(path).expanduser()
+        if requested.is_symlink():
+            raise RemoteAccessError("Symbolic links are not followed by file operations")
+        info = requested.lstat()
+    else:
+        info = _sftp(session).lstat(str(path))
+    mode = info.st_mode or 0
+    if stat.S_ISLNK(mode):
+        raise RemoteAccessError("Symbolic links are not followed by file operations")
+    if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+        raise RemoteAccessError("Only regular files and directories are supported")
+    return info
+
+
+def _endpoint_join(session: "RemoteSession | None", directory: str | Path,
+                   name: str) -> str | Path:
+    safe_name = _validate_name(name)
+    return posixpath.join(str(directory), safe_name) if session is not None else Path(directory) / safe_name
+
+
+def _endpoint_list(session: "RemoteSession | None", path: str | Path) -> list[dict[str, Any]]:
+    if session is not None:
+        return list_remote(session, str(path))
+    directory = _local_directory(path)
+    items = []
+    for child in directory.iterdir():
+        info = child.lstat()
+        mode = info.st_mode
+        items.append({"name": child.name, "size": info.st_size,
+                      "is_dir": stat.S_ISDIR(mode), "is_symlink": stat.S_ISLNK(mode),
+                      "mtime": int(info.st_mtime)})
+    return sorted(items, key=lambda item: (not item["is_dir"], item["name"].casefold()))
+
+
+def _open_source(session: "RemoteSession | None", path: str | Path):
+    if session is not None:
+        return _sftp(session).open(str(path), "rb")
+    requested = Path(path).expanduser()
+    if requested.is_symlink():
+        raise RemoteAccessError("Symbolic links are not followed by file operations")
+    fd = os.open(requested, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise RemoteAccessError("Only regular files can be copied as file data")
+    return os.fdopen(fd, "rb")
+
+
+def _write_file(session: "RemoteSession | None", destination: str | Path,
+                reader: Any, size: int, *, overwrite: bool,
+                progress: Callable[[int, int], None] | None,
+                cancel: threading.Event | None) -> None:
+    def copy_chunks(stream):
+        transferred = 0
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Transfer cancelled")
+            chunk = reader.read(128 * 1024)
+            if not chunk:
+                break
+            stream.write(chunk)
+            transferred += len(chunk)
+            if progress is not None:
+                progress(transferred, size)
+        if transferred != size:
+            raise RemoteAccessError("Source file changed or ended during transfer")
+
+    if session is not None:
+        final_path = str(destination)
+        sftp = _sftp(session)
+        exists = _remote_exists(sftp, final_path)
+        if exists and not overwrite:
+            raise FileExistsError("Remote destination already exists")
+        if exists:
+            mode = sftp.lstat(final_path).st_mode or 0
+            if stat.S_ISLNK(mode):
+                raise RemoteAccessError("Refusing to overwrite a symbolic link")
+            if not stat.S_ISREG(mode):
+                raise IsADirectoryError("Cannot replace a non-file destination")
+        target = PurePosixPath(final_path)
+        temporary = str(target.with_name(
+            f".proxypilot-{secrets.token_hex(12)}.part"))
+        backup = None
+        try:
+            with sftp.open(temporary, "xb") as stream:
+                copy_chunks(stream)
+            if int(sftp.stat(temporary).st_size or 0) != size:
+                raise RemoteAccessError("Remote file size verification failed")
+            if exists:
+                backup = str(target.with_name(
+                    f".{target.name}.proxypilot-{secrets.token_hex(8)}.backup"))
+                sftp.rename(final_path, backup)
+            try:
+                sftp.rename(temporary, final_path)
+            except Exception as replacement_error:
+                if backup is not None:
+                    try:
+                        sftp.rename(backup, final_path)
+                    except Exception as restore_error:
+                        raise RemoteAccessError(
+                            f"The new file could not be placed and the old file remains at {backup}"
+                        ) from restore_error
+                raise replacement_error
+            if backup is not None:
+                try:
+                    sftp.remove(backup)
+                except OSError:
+                    pass
+        except Exception:
+            try:
+                sftp.remove(temporary)
+            except OSError:
+                pass
+            raise
+        return
+
+    final_path = Path(destination)
+    parent = _local_directory(final_path.parent)
+    final_path = parent / final_path.name
+    if final_path.is_symlink():
+        raise RemoteAccessError("Refusing to overwrite a symbolic link")
+    exists = final_path.exists()
+    if exists and not overwrite:
+        raise FileExistsError("Local destination already exists")
+    if exists and final_path.is_dir():
+        raise IsADirectoryError("Cannot replace a directory with a file")
+    fd, temporary_name = tempfile.mkstemp(prefix=".proxypilot-",
+                                           suffix=".part", dir=parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            copy_chunks(stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if temporary.stat().st_size != size:
+            raise RemoteAccessError("Local file size verification failed")
+        if overwrite:
+            os.replace(temporary, final_path)
+        else:
+            os.link(temporary, final_path, follow_symlinks=False)
+            temporary.unlink()
+    except Exception:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _remove_tree(session: "RemoteSession | None", path: str | Path) -> None:
+    info = _endpoint_lstat(session, path)
+    if stat.S_ISDIR(info.st_mode):
+        for item in _endpoint_list(session, path):
+            child = _endpoint_join(session, path, item["name"])
+            _remove_tree(session, child)
+        if session is None:
+            Path(path).rmdir()
+        else:
+            _sftp(session).rmdir(str(path))
+    elif session is None:
+        Path(path).unlink()
+    else:
+        _sftp(session).remove(str(path))
+
+
+def transfer_entry(source_session: "RemoteSession | None", source_path: str | Path,
+                   destination_session: "RemoteSession | None",
+                   destination_directory: str | Path, *, move: bool = False,
+                   overwrite: bool = False,
+                   progress: Callable[[int, int], None] | None = None,
+                   cancel: threading.Event | None = None) -> str | Path:
+    """Copy one file or directory between local/SFTP endpoints, then optionally move it.
+
+    A directory is staged under a unique temporary name and published by rename only
+    after every descendant is copied. Existing destination directories are never merged.
+    """
+    source_name = (PurePosixPath(str(source_path)).name if source_session is not None
+                   else Path(source_path).name)
+    _validate_name(source_name)
+    info = _endpoint_lstat(source_session, source_path)
+    destination = _endpoint_join(destination_session, destination_directory, source_name)
+    same_endpoint = source_session is destination_session
+    if same_endpoint:
+        src = posixpath.normpath(str(source_path)) if source_session is not None else Path(source_path).resolve(strict=True)
+        dst = posixpath.normpath(str(destination)) if destination_session is not None else Path(destination)
+        if src == dst:
+            if move:
+                return destination
+            raise FileExistsError("Source and destination are the same path")
+        if stat.S_ISDIR(info.st_mode):
+            if source_session is not None:
+                if dst.startswith(src.rstrip("/") + "/"):
+                    raise ValueError("A directory cannot be copied into itself")
+            elif src in dst.parents:
+                raise ValueError("A directory cannot be copied into itself")
+        if move:
+            if source_session is None:
+                if Path(dst).exists() or Path(dst).is_symlink():
+                    raise FileExistsError("Destination already exists")
+                os.rename(src, dst)
+                return dst
+            return rename_remote_to(source_session, str(src), str(dst))
+
+    if stat.S_ISREG(info.st_mode):
+        destination = _endpoint_join(destination_session, destination_directory, source_name)
+        with _open_source(source_session, source_path) as reader:
+            _write_file(destination_session, destination, reader, int(info.st_size or 0),
+                        overwrite=overwrite, progress=progress, cancel=cancel)
+        if move:
+            try:
+                if source_session is None:
+                    Path(source_path).unlink()
+                else:
+                    _sftp(source_session).remove(str(source_path))
+            except Exception as exc:
+                raise RemoteAccessError(
+                    f"File was copied to {destination}, but the source could not be removed: {exc}"
+                ) from exc
+        return destination
+
+    if overwrite:
+        raise IsADirectoryError("Replacing or merging an existing directory is not supported")
+    if _destination_exists(destination_session, destination):
+        raise FileExistsError("Destination directory already exists")
+
+    if destination_session is None:
+        parent = _local_directory(destination_directory)
+        final_directory = parent / source_name
+        if final_directory.exists() or final_directory.is_symlink():
+            raise FileExistsError("Destination directory already exists")
+        staging = Path(tempfile.mkdtemp(prefix=".proxypilot-", dir=parent))
+        published = False
+        try:
+            _copy_directory_contents(source_session, source_path, destination_session,
+                                     staging, progress=progress, cancel=cancel)
+            if final_directory.exists() or final_directory.is_symlink():
+                raise FileExistsError("Destination directory appeared during transfer")
+            os.rename(staging, final_directory)
+            published = True
+        finally:
+            if not published:
+                shutil.rmtree(staging, ignore_errors=True)
+        destination = final_directory
+    else:
+        sftp = _sftp(destination_session)
+        parent = str(destination_directory)
+        staging = posixpath.join(parent,
+            f".proxypilot-{secrets.token_hex(12)}.part")
+        sftp.mkdir(staging)
+        published = False
+        try:
+            _copy_directory_contents(source_session, source_path, destination_session,
+                                     staging, progress=progress, cancel=cancel)
+            if _remote_exists(sftp, str(destination)):
+                raise FileExistsError("Destination directory appeared during transfer")
+            sftp.rename(staging, str(destination))
+            published = True
+        finally:
+            if not published:
+                try:
+                    _remove_tree(destination_session, staging)
+                except Exception:
+                    pass
+        destination = str(destination)
+
+    if move:
+        try:
+            _remove_tree(source_session, source_path)
+        except Exception as exc:
+            raise RemoteAccessError(
+                f"Directory was copied to {destination}, but source cleanup was incomplete: {exc}"
+            ) from exc
+    return destination
+
+
+def _destination_exists(session: "RemoteSession | None", path: str | Path) -> bool:
+    if session is None:
+        return Path(path).exists() or Path(path).is_symlink()
+    return _remote_exists(_sftp(session), str(path))
+
+
+def entry_type(session: "RemoteSession | None", path: str | Path) -> str | None:
+    """Return file, directory, symlink, or None without following symlinks."""
+    try:
+        info = (Path(path).expanduser().lstat() if session is None
+                else _sftp(session).lstat(str(path)))
+    except OSError as exc:
+        if getattr(exc, "errno", None) == 2 or isinstance(exc, FileNotFoundError):
+            return None
+        if str(exc).casefold() in ("no such file", "no such file or directory"):
+            return None
+        raise
+    mode = info.st_mode or 0
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "file"
+    return "special"
+
+
+def _copy_directory_contents(source_session: "RemoteSession | None", source_path: str | Path,
+                             destination_session: "RemoteSession | None",
+                             destination_path: str | Path, *,
+                             progress: Callable[[int, int], None] | None,
+                             cancel: threading.Event | None) -> None:
+    for item in _endpoint_list(source_session, source_path):
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Transfer cancelled")
+        if item["is_symlink"]:
+            raise RemoteAccessError(f"Refusing to copy symbolic link: {item['name']}")
+        source = _endpoint_join(source_session, source_path, item["name"])
+        if item["is_dir"]:
+            child = _endpoint_join(destination_session, destination_path, item["name"])
+            if destination_session is None:
+                Path(child).mkdir(mode=0o700)
+            else:
+                _sftp(destination_session).mkdir(str(child))
+            _copy_directory_contents(source_session, source, destination_session,
+                                     child, progress=progress, cancel=cancel)
+        else:
+            transfer_entry(source_session, source, destination_session,
+                           destination_path, progress=progress, cancel=cancel)
+
+
 def _remote_exists(sftp: Any, path: str) -> bool:
     try:
-        sftp.stat(path)
+        (sftp.lstat if hasattr(sftp, "lstat") else sftp.stat)(path)
         return True
     except OSError as exc:
         if getattr(exc, "errno", None) == 2 or str(exc).casefold() in ("no such file", "no such file or directory"):
@@ -724,7 +1142,10 @@ class RemoteSession:
 
 __all__ = ["SSHProfile", "RemoteAccessError", "ProxyTunnelError",
            "UnknownHostKeyError", "HostKeyChangedError", "connect_profile",
-           "create_remote_directory", "delete_profile", "delete_remote", "download_file",
-           "fingerprint_sha256", "list_local",
-           "list_remote", "load_profiles", "open_proxy_tunnel", "profile_path",
-           "rename_remote", "save_profiles", "trust_host_key", "upsert_profile", "upload_file"]
+           "create_local_directory", "create_local_file", "create_remote_directory",
+           "create_remote_file", "delete_local", "delete_profile", "delete_remote",
+           "download_file", "fingerprint_sha256", "list_local", "list_remote",
+           "entry_type", "load_profiles", "normalize_remote_path", "open_proxy_tunnel",
+           "profile_path", "rename_local",
+           "rename_remote", "rename_remote_to", "save_profiles", "transfer_entry",
+           "trust_host_key", "upsert_profile", "upload_file"]

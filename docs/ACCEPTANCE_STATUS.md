@@ -23,12 +23,14 @@ Status for the current ProxyPilot 1.0 preview source. “Pass” means an isolat
 | 17 | Rollback | Partial. Isolated installer test `test_service_failure_rolls_back_code_and_unit_files` verifies restoration after a mocked service failure. In-place update rollback is not implemented. |
 | 18 | Errors are reported honestly | Partial. Proxy errors, missing service state, proxy mismatch warnings, and unverified evidence have tests. Broader real-network/system failure coverage remains open. |
 | 19 | SSH host verification, shell, and proxy routing | Pass with local fixtures on Paramiko 2.12.0, 3.4.1, and 4.0.0. `test_new_server_key_requires_review_then_shell_uses_verified_transport` verifies that a new key is refused, pinned only after the explicit trust step, and then used for an interactive SSH shell. `test_proxy_profile_routes_ssh_through_force_proxy_bridge` verifies that the SSH session is carried by the bridge's strict proxy route, including a destination that would normally match a bypass entry. No external SSH server is contacted. |
-| 20 | SFTP browsing and file transfers | Pass against a local filesystem-backed SFTP protocol double. `test_upload_and_download_are_complete_and_report_progress`, `test_overwrite_requires_explicit_flag_and_preserves_new_content`, `test_transfer_refuses_symlinks_and_invalid_remote_paths`, and `test_remote_file_operations_are_single_component_and_non_recursive` cover complete transfers and safety behavior. Interoperability with a separately installed OpenSSH server remains a manual check. |
+| 20 | SFTP browsing and file transfers | Pass against a local filesystem-backed SFTP protocol double. `tests.test_remote_files` covers local/remote and remote/remote file/directory copy or move, progress, overwrite handling, cancellation, symlink refusal, and create/rename/delete operations. Interoperability with a separately installed OpenSSH server remains a manual check. |
+| 21 | Saved profile selection/deletion and independent SSH windows | Pass for GTK smoke coverage in `tests/gtk_window_smoke.py`: select, save, reselect, and delete a profile; create the two-pane file manager; instantiate two distinct terminal windows without opening network connections. Physical mouse-driven drag/drop and real server sessions remain manual checks. |
 
 ## Stable-release blockers
 
 - Update installation and rollback are missing.
 - The 1.0 GTK UI has only startup/shutdown smoke coverage, not full interaction QA.
 - SSH/SFTP work has in-process protocol coverage; an interactive session with an independently configured OpenSSH server and a desktop visual acceptance run remain open.
+- The new two-pane UI has display-backed startup/teardown coverage; interactive drag/drop and transfer behavior should still be exercised against two test servers before stable 1.0.
 - The live installation and system proxy settings were not changed or restarted during development.
 - Real SSH, desktop-entry, Flatpak/Snap, resource benchmark, and full system-package install/upgrade checks remain open.
