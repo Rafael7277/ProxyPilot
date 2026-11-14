@@ -17,6 +17,12 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertEqual(build_release._debian_artifact_name("1.0.0-alpha.1","amd64"),
                          "proxypilot_1.0.0-alpha.1_amd64.deb")
 
+    def test_project_version_is_the_semver_source_for_release_builds(self):
+        self.assertEqual(build_release.version(), "1.0.0-alpha.2")
+        self.assertEqual(build_release._to_release_version(build_release.version()),
+                         "1.0.0-alpha.2")
+        self.assertEqual(build_release._to_python_version(build_release.version()), "1.0.0a2")
+
     def test_stable_release_versions_are_unchanged(self):
         self.assertEqual(build_release._to_python_version("1.2.3"),"1.2.3")
         self.assertEqual(build_release._to_release_version("1.2.3"),"1.2.3")

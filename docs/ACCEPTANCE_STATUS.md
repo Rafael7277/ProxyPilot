@@ -1,6 +1,6 @@
 # ProxyPilot 1.0 acceptance status
 
-Status for the `1.0.0-alpha.1` preview source. “Pass” means an isolated automated check or a bounded local smoke test passed. It does not imply that a stable release is ready.
+Status for the `1.0.0-alpha.2` preview source. “Pass” means an isolated automated check or a bounded local smoke test passed. It does not imply that a stable release is ready.
 
 | # | Acceptance criterion | Status and evidence |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ Status for the `1.0.0-alpha.1` preview source. “Pass” means an isolated auto
 | 12 | Upgrade from current version | Pass in temporary HOME fixtures for legacy config and old source modules. The real installation has not been upgraded. |
 | 13 | Debian package build | Partial. `build_release.py` creates amd64 `.deb`, checks metadata/checksums, extracts it, and runs the packaged CLI version. Root-level `dpkg -i` install/upgrade was deliberately not run. |
 | 14 | GitHub Actions | Pass. GitHub run `43583090344` passed the unit/integration suite, GTK smoke under Xvfb, artifact build, CodeQL, and Python 3.11/3.14 matrix; security checks passed in `43583090338`. |
-| 15 | Release artifact generation | Pass locally for `1.0.0-alpha.1`: source `.tar.gz`, source `.zip`, amd64 `.deb`, wheel, `SHA256SUMS`; payloads and checksums are validated. GitHub provenance attestation and public release publication are the final steps. |
+| 15 | Release artifact generation | Pass locally for `1.0.0-alpha.2`: source `.tar.gz`, source `.zip`, amd64 `.deb`, wheel, `SHA256SUMS`; payloads and checksums are validated. The first GitHub release exposed filename normalization and dynamic-version drift; both are being fixed before publishing the next artifact. |
 | 16 | Update discovery and installation | Partial. Latest-stable release metadata lookup is implemented and mock-tested. Download/install and update rollback are not implemented; GitHub build provenance is provided for release artifacts. |
 | 17 | Rollback | Partial. Isolated installer test `test_service_failure_rolls_back_code_and_unit_files` verifies restoration after a mocked service failure. In-place update rollback is not implemented. |
 | 18 | Errors are reported honestly | Partial. Proxy errors, missing service state, proxy mismatch warnings, and unverified evidence have tests. Broader real-network/system failure coverage remains open. |

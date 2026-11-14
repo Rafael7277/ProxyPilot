@@ -2,7 +2,7 @@
 
 **Linux proxy manager for proxy-aware desktop and CLI applications.** ProxyPilot combines a local HTTP proxy bridge, SOCKS5 upstream support, per-app policy controls, process/socket evidence, and headless administration over SSH.
 
-> **Pre-release status:** this checkout reports `1.0.0a1` (SemVer release tag `v1.0.0-alpha.1`); it is not a stable release. The project uses the MIT License. The canonical repository is [Rafael7277/ProxyPilot](https://github.com/Rafael7277/ProxyPilot).
+> **Pre-release status:** this checkout reports `1.0.0-alpha.2`; it is not a stable release. The project uses the MIT License. The canonical repository is [Rafael7277/ProxyPilot](https://github.com/Rafael7277/ProxyPilot).
 
 ## What it does
 
