@@ -70,7 +70,16 @@ class ParamikoClientTests(unittest.TestCase):
             except (OSError, paramiko.SSHException):
                 transport.close()
                 continue
-            channel = transport.accept(5)
+            try:
+                # The first client intentionally closes immediately after the
+                # server presents its previously unknown host key. Paramiko
+                # reports that expected disconnect as EOFError while waiting
+                # for the authenticated channel; keep the fixture alive for
+                # the subsequent connection after the test pins that key.
+                channel = transport.accept(5)
+            except (EOFError, OSError, paramiko.SSHException):
+                transport.close()
+                continue
             if channel is None:
                 transport.close()
                 continue
