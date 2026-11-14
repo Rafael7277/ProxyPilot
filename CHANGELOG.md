@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.8](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.7...v1.0.0-alpha.8) (2026-11-14)
+
+
+### Features
+
+* **ssh:** add session-only profile password field ([#21](https://github.com/Rafael7277/ProxyPilot/issues/21)) ([cb5d4fc](https://github.com/Rafael7277/ProxyPilot/commit/cb5d4fcd0e79266bbf5763c0d9a2a9b171ac4d11))
+
 ## [1.0.0-alpha.7](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.6...v1.0.0-alpha.7) (2026-11-14)
 
 

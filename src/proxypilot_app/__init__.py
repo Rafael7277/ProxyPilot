@@ -1,3 +1,3 @@
 """Shared service and user interface package for ProxyPilot."""
 
-__version__ = "1.0.0-alpha.7"  # x-release-please-version
+__version__ = "1.0.0-alpha.8"  # x-release-please-version
