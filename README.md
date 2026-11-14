@@ -2,7 +2,7 @@
 
 **Linux proxy manager for proxy-aware desktop and CLI applications.** ProxyPilot combines a local HTTP proxy bridge, SOCKS5 upstream support, per-app policy controls, process/socket evidence, and headless administration over SSH.
 
-> **Pre-release status:** this checkout reports `1.0.0-alpha.2`; it is not a stable release. The project uses the MIT License. The canonical repository is [Rafael7277/ProxyPilot](https://github.com/Rafael7277/ProxyPilot).
+> **Pre-release status:** this checkout reports `1.0.0-alpha.3`; it is not a stable release. The project uses the MIT License. The canonical repository is [Rafael7277/ProxyPilot](https://github.com/Rafael7277/ProxyPilot).
 
 ## What it does
 
@@ -44,7 +44,7 @@ Download the current preview release from [GitHub Releases](https://github.com/R
 
 ```bash
 release_dir="$(mktemp -d)"
-release_tag="$(gh release list --repo Rafael7277/ProxyPilot --limit 1 --json tagName --jq '.[0].tagName')"
+release_tag="$(gh release list --repo Rafael7277/ProxyPilot --limit 100 --json tagName,isDraft --jq '[.[] | select(.isDraft == false)][0].tagName')"
 test -n "$release_tag"
 gh release download "$release_tag" --repo Rafael7277/ProxyPilot --dir "$release_dir"
 (cd "$release_dir" && sha256sum --check SHA256SUMS)
@@ -154,4 +154,4 @@ CI runs unit and isolated installer/upgrade/uninstaller tests, headless CLI chec
 
 ## Contributing and releases
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md). Releases use Semantic Versioning and Conventional Commits. The initial `1.0.0-alpha.1` release is a preview; stable `1.0.0` waits for the open acceptance checks to pass.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md). Releases use Semantic Versioning and Conventional Commits. `1.0.0-alpha.3` is the current preview; stable `1.0.0` waits for the open acceptance checks to pass.
