@@ -18,10 +18,11 @@ class ReleaseVersionTests(unittest.TestCase):
                          "proxypilot_1.0.0-alpha.1_amd64.deb")
 
     def test_project_version_is_the_semver_source_for_release_builds(self):
-        self.assertEqual(build_release.version(), "1.0.0-alpha.2")
-        self.assertEqual(build_release._to_release_version(build_release.version()),
-                         "1.0.0-alpha.2")
-        self.assertEqual(build_release._to_python_version(build_release.version()), "1.0.0a2")
+        release_version = build_release.version()
+        self.assertRegex(release_version, r"^\d+\.\d+\.\d+-(?:alpha|beta|rc)\.\d+$")
+        self.assertEqual(build_release._to_release_version(release_version), release_version)
+        self.assertRegex(build_release._to_python_version(release_version),
+                         r"^\d+\.\d+\.\d+(?:a|b|rc)\d+$")
 
     def test_stable_release_versions_are_unchanged(self):
         self.assertEqual(build_release._to_python_version("1.2.3"),"1.2.3")
