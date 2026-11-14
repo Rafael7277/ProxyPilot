@@ -59,6 +59,14 @@ def _to_debian_version(release_version: str) -> str:
     return f"{major}.{minor}.{patch}~{stage}{number}"
 
 
+def _debian_artifact_name(release_version: str, arch: str) -> str:
+    # Keep the release filename URL-safe and stable. The package metadata still
+    # uses Debian's correct '~' prerelease ordering; GitHub normalizes '~' in
+    # uploaded asset names, which would otherwise break the checksum manifest.
+    _to_debian_version(release_version)
+    return f"proxypilot_{release_version}_{arch}.deb"
+
+
 def _copy_source(destination: Path) -> None:
     destination.mkdir(parents=True,exist_ok=True)
     for path in ROOT.rglob("*"):
@@ -141,7 +149,7 @@ def _make_deb(output: Path, release_version: str, arch: str, maintainer: str) ->
                        "Terminal=false\nCategories=Network;Settings;\n")
         icon=root/"usr/share/icons/hicolor/scalable/apps/proxypilot.svg"
         icon.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/"proxypilot-icon.svg",icon)
-        path=output/f"proxypilot_{debian_version}_{arch}.deb"
+        path=output/_debian_artifact_name(release_version,arch)
         subprocess.run(["dpkg-deb","--build","--root-owner-group",str(root),str(path)],check=True,
                        capture_output=True,text=True)
         info=subprocess.run(["dpkg-deb","--info",str(path)],check=True,capture_output=True,text=True)
