@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.4](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2026-11-14)
+
+
+### Documentation
+
+* select published releases and record alpha3 ([#9](https://github.com/Rafael7277/ProxyPilot/issues/9)) ([c5d946b](https://github.com/Rafael7277/ProxyPilot/commit/c5d946bcc653ab805183de4d94d0d855ee12bf3d))
+
 ## [1.0.0-alpha.3](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.2...v1.0.0-alpha.3) (2026-11-14)
 
 
