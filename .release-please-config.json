@@ -5,6 +5,9 @@
       "release-type": "python",
       "package-name": "proxypilot",
       "include-component-in-tag": false,
+      "extra-files": [
+        { "type": "generic", "path": "src/proxypilot_app/__init__.py" }
+      ],
       "versioning": "prerelease",
       "prerelease-type": "alpha",
       "prerelease": true,

@@ -48,7 +48,7 @@ jobs:
           if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", tag):
               raise SystemExit("Release tag must use vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N")
           version = tag.removeprefix("v")
-          if build_release._to_python_version(version) != build_release.version():
+          if build_release._to_release_version(build_release.version()) != version:
               raise SystemExit(f"Tag {tag} does not match source version {build_release.version()}")
           if os.environ["PUBLISH"].lower() == "true":
               from pathlib import Path
