@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.9](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.8...v1.0.0-alpha.9) (2026-11-14)
+
+
+### Features
+
+* **ssh:** improve file manager and resume SFTP transfers ([#23](https://github.com/Rafael7277/ProxyPilot/issues/23)) ([42290a8](https://github.com/Rafael7277/ProxyPilot/commit/42290a8bb980ad2499e3cf8f0c9abc457f572689))
+
 ## [1.0.0-alpha.8](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.7...v1.0.0-alpha.8) (2026-11-14)
 
 
