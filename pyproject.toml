@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxypilot"
+dynamic = ["version"]
+description = "A Linux desktop and CLI manager for proxy-aware applications"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Rafael", email = "97381065+Rafael7277@users.noreply.github.com" }]
+keywords = ["linux", "proxy", "socks5", "network", "desktop"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Internet :: Proxy Servers",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Rafael7277/ProxyPilot"
+Repository = "https://github.com/Rafael7277/ProxyPilot"
+Issues = "https://github.com/Rafael7277/ProxyPilot/issues"
+Changelog = "https://github.com/Rafael7277/ProxyPilot/releases"
+
+[project.optional-dependencies]
+desktop = []
+
+[project.scripts]
+proxypilot = "proxypilot_app.cli:main"
+proxypilot-gui = "proxypilot_app.gtk_ui:main"
+
+[tool.setuptools]
+packages = ["proxypilot_app"]
+py-modules = ["proxypilot", "manager", "desktop", "appicons", "traffic", "socketwatch", "netobserve", "appstatus", "checkui", "diagnostics"]
+package-dir = { "" = ".", "proxypilot_app" = "src/proxypilot_app" }
+
+[tool.setuptools.dynamic]
+version = { attr = "proxypilot_app.__version__" }

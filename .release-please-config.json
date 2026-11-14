@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "proxypilot",
+      "include-component-in-tag": false,
+      "versioning": "prerelease",
+      "prerelease-type": "alpha",
+      "prerelease": true,
+      "draft": true,
+      "force-tag-creation": true,
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "perf", "section": "Performance" },
+        { "type": "docs", "section": "Documentation" },
+        { "type": "security", "section": "Security" },
+        { "type": "build", "section": "Build and packaging", "hidden": true },
+        { "type": "ci", "section": "CI", "hidden": true },
+        { "type": "refactor", "section": "Refactoring", "hidden": true },
+        { "type": "test", "section": "Tests", "hidden": true }
+      ]
+    }
+  }
+}

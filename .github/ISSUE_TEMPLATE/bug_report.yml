@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a reproducible ProxyPilot issue
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Remove credentials, private proxy URLs, process environments, and traffic logs before submitting."
+  - type: input
+    id: version
+    attributes:
+      label: ProxyPilot version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Linux distribution and desktop
+      placeholder: "Ubuntu, GNOME/X11"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized diagnostics
+    validations:
+      required: true

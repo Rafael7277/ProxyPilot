@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-compatibility:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile and run headless suite
+        run: |
+          python -m compileall -q .
+          python -m unittest discover -s tests -v
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install system test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 xvfb dbus-x11 dpkg-dev python3-pip python3-setuptools python3-wheel python3-venv
+      - name: Compile Python modules
+        run: /usr/bin/python3 -m compileall -q .
+      - name: Run unit and isolated installation tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Check public source tree
+        run: /usr/bin/python3 scripts/check_public_tree.py
+      - name: Review unsafe Python patterns
+        run: /usr/bin/python3 scripts/security_review.py
+      - name: GTK smoke test under Xvfb
+        run: |
+          smoke_home="$(mktemp -d)"
+          mkdir -p "$smoke_home/home"
+          env HOME="$smoke_home/home" \
+            XDG_CONFIG_HOME="$smoke_home/config" \
+            XDG_DATA_HOME="$smoke_home/data" \
+            XDG_STATE_HOME="$smoke_home/state" \
+            PYTHONPATH=src PROXYPILOT_SMOKE_TEST=1 \
+            xvfb-run -a dbus-run-session -- /usr/bin/python3 -m proxypilot_app.gtk_ui
+      - name: Build distributable artifacts
+        run: |
+          python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' wheel
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" scripts/build_release.py --output "$RUNNER_TEMP/proxypilot-release"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          languages: python
+          build-mode: none
+      - name: Analyze source
+        uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          category: /language:python

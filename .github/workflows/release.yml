@@ -1,0 +1,110 @@
+name: Build and publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Approved SemVer tag, for example v1.0.0-alpha.1
+        required: true
+        type: string
+      publish:
+        description: Publish verified artifacts to GitHub Releases
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - name: Check out the approved tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag and approved license
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          sys.path.insert(0, "scripts")
+          import build_release
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", tag):
+              raise SystemExit("Release tag must use vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N")
+          version = tag.removeprefix("v")
+          if build_release._to_python_version(version) != build_release.version():
+              raise SystemExit(f"Tag {tag} does not match source version {build_release.version()}")
+          if os.environ["PUBLISH"].lower() == "true":
+              from pathlib import Path
+              metadata = Path("pyproject.toml").read_text()
+              if "license = \"MIT\"" not in metadata or not Path("LICENSE").is_file():
+                  raise SystemExit("An approved MIT license is required before publishing")
+          PY
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 xvfb dbus-x11 dpkg-dev python3-pip python3-setuptools python3-wheel python3-venv
+
+      - name: Run release regression tests
+        run: |
+          /usr/bin/python3 -m compileall -q .
+          /usr/bin/python3 -m unittest discover -s tests -v
+          /usr/bin/python3 scripts/check_public_tree.py
+          /usr/bin/python3 scripts/security_review.py
+
+      - name: Build release artifacts
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' wheel
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" scripts/build_release.py --version "$version" --output dist
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Attest release artifacts
+        if: ${{ inputs.publish }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+
+      - name: Verify artifact attestations
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in dist/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: Publish verified artifacts
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          release_args=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" dist/* \
+            --title "ProxyPilot $RELEASE_TAG" \
+            --generate-notes \
+            "${release_args[@]}"

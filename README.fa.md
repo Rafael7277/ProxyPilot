@@ -1,0 +1,103 @@
+# ProxyPilot
+
+**مدیر پراکسی لینوکس برای برنامه‌های سازگار با پراکسی**؛ شامل پل HTTP محلی با upstream از نوع SOCKS5، سیاست‌های هر برنامه، شواهد اتصال و CLI قابل‌استفاده از SSH.
+
+> **وضعیت پیش‌انتشار:** نسخهٔ این checkout برابر `1.0.0a1` است (برچسب SemVer: `v1.0.0-alpha.1`) و انتشار پایدار نیست. مجوز پروژه MIT است و مخزن رسمی [Rafael7277/ProxyPilot](https://github.com/Rafael7277/ProxyPilot) است.
+
+## امکانات
+
+- ارائهٔ پراکسی HTTP و HTTPS CONNECT روی loopback با upstream از نوع SOCKS5.
+- حالت‌های `DIRECT`، `PROXY ONLY`، `AUTO` و `USE SYSTEM SETTINGS`.
+- امکان فعال یا غیرفعال‌کردن fallback مستقیم در حالت AUTO؛ حالت PROXY ONLY برای اتصال‌های عبوری از پل fail-closed است.
+- نمایش جداگانهٔ قانون درخواستی، تنظیم مؤثر لانچر/سرویس، اتصال مشاهده‌شده و نتیجهٔ راستی‌آزمایی.
+- CLI برای ترمینال و SSH، بدون نیاز به `DISPLAY`.
+- رابط دسکتاپ GTK 4 که از همان هستهٔ CLI استفاده می‌کند.
+- بررسی پردازش‌ها و سوکت‌های TCP همان کاربر، تنظیمات GNOME و محیط systemd کاربر، بدون root.
+- حفظ قالب تنظیمات قدیمی و ورودی سرویس `proxypilot.py serve`.
+
+## محدودیت‌ها
+
+ProxyPilot در این نسخه TUN یا رهگیری شفاف بسته‌ها ندارد؛ نمی‌تواند همهٔ برنامه‌ها، UDP یا تمام اتصال‌های TCP را مجبور به استفاده از پراکسی کند. برنامه باید تنظیمات سیستم، متغیرهای محیطی یا لانچر مدیریت‌شده را رعایت کند.
+
+نسبت‌دادن PID و سوکت best-effort است و به اطلاعات قابل‌مشاهده برای همان کاربر محدود می‌شود. اتصال به Xray فقط تماس با آن listener را نشان می‌دهد؛ عبور تمام درخواست‌ها یا IP خروجی نهایی را ثابت نمی‌کند. نبود شواهد به معنی «تأییدنشده» است.
+
+تنظیم پراکسی سراسری فعلاً GSettings مربوط به GNOME و محیط systemd کاربر را مدیریت می‌کند؛ محیط‌های دیگر هنوز پشتیبانی‌شده اعلام نشده‌اند.
+
+## نیازمندی‌ها
+
+- لینوکس و Python 3.11 یا جدیدتر.
+- systemd user manager برای سرویس پل.
+- GTK 4 و PyGObject برای رابط گرافیکی.
+- یک سرویس SOCKS5 اختیاری مانند Xray.
+
+نصب headless بدون GTK:
+
+```bash
+bash install.sh --cli-only
+```
+
+## نصب
+
+### نصب بستهٔ Debian از GitHub
+
+نسخهٔ پیش‌نمایش را از [GitHub Releases](https://github.com/Rafael7277/ProxyPilot/releases) دریافت کن. با GitHub CLI فایل‌ها را بگیر و پیش از نصب checksum را بررسی کن:
+
+```bash
+release_dir="$(mktemp -d)"
+release_tag="$(gh release list --repo Rafael7277/ProxyPilot --limit 1 --json tagName --jq '.[0].tagName')"
+test -n "$release_tag"
+gh release download "$release_tag" --repo Rafael7277/ProxyPilot --dir "$release_dir"
+(cd "$release_dir" && sha256sum --check SHA256SUMS)
+for artifact in "$release_dir"/*; do
+  test "${artifact##*/}" = SHA256SUMS || gh attestation verify "$artifact" --repo Rafael7277/ProxyPilot
+done
+sudo apt install "$release_dir"/proxypilot_*_amd64.deb
+```
+
+بستهٔ Debian نرم‌افزار را برای همهٔ کاربران نصب می‌کند و سرویس کاربر را خودکار فعال نمی‌کند. برای نصب فقط در حساب خودت و بدون root، نصب‌کنندهٔ سورس را اجرا کن.
+
+### دریافت سورس از GitHub
+
+```bash
+git clone https://github.com/Rafael7277/ProxyPilot.git
+cd ProxyPilot
+```
+
+ابتدا مسیرها را بررسی کن:
+
+```bash
+bash install.sh --dry-run
+```
+
+سپس نصب تعاملی:
+
+```bash
+bash install.sh
+```
+
+نصب‌کننده از فایل‌های متعلق به ProxyPilot نسخهٔ پشتیبان می‌گیرد و پیش از شروع یا راه‌اندازی مجدد سرویس خودش تأیید می‌گیرد. تنظیمات نامرتبط سیستم و برنامه‌ها را تغییر نمی‌دهد. فعال‌سازی linger خودکار نیست.
+
+## چند فرمان CLI
+
+```bash
+proxypilot status
+proxypilot doctor
+proxypilot apps --json
+proxypilot inspect background-gateway --json
+proxypilot connections --follow
+proxypilot route set sample-app auto                 # فقط پیش‌نمایش
+proxypilot route set sample-app auto --apply --yes   # اعمال صریح
+proxypilot run --mode proxy -- curl https://example.com
+```
+
+تغییر مسیر به‌صورت پیش‌فرض فقط پیش‌نمایش است. اعمال تغییر نیازمند `--apply --yes` است؛ ری‌استارت سرویس هم بدون گزینهٔ صریح انجام نمی‌شود.
+
+## توسعه و انتشار
+
+```bash
+python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m proxypilot_app status --json
+python3 scripts/check_public_tree.py
+```
+
+راهنمای معماری، مهاجرت، پشتیبانی و انتشار در پوشهٔ `docs/` است. `1.0.0-alpha.1` نسخهٔ پیش‌نمایش است؛ انتشار پایدار `1.0.0` پس از عبور از آزمون‌های پذیرش باز انجام می‌شود.

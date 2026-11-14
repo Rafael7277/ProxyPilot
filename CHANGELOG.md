@@ -1,0 +1,48 @@
+# Changelog
+
+Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
+
+## [Unreleased]
+
+### Changed
+
+- Prepare MIT-licensed source and `1.0.0-alpha.1` GitHub release artifacts.
+
+## [1.0.0-alpha.1] — 2026-11-14
+
+### Added
+
+- Local-only Git feature branch and baseline, architecture, and migration documentation.
+- Shared application API for CLI and GTK desktop clients.
+- Headless CLI commands for status, diagnostics, app discovery, inspection, connection evidence, route preview/apply, process review, and wrapped command launch.
+- GTK 4 desktop client with non-blocking scans and confirmation dialogs for route changes.
+- XDG-aware configuration, application, and state paths.
+- Explicit AUTO direct-fallback configuration, preserving legacy AUTO behavior by default.
+- SOCKS5 IPv4/IPv6 address encoding and local-only SOCKS health handshake.
+- Desktop-entry field-code forwarding, correct Desktop Entry quoting, and safe refusal of unsupported D-Bus/action launchers.
+- TCP half-close relay support and SSH/shell process cleanup protections.
+- User-local installer with dry-run, private backups, ownership checks, rollback, CLI-only mode, and no automatic linger changes.
+- Manifest-backed user uninstaller that preserves configuration and refuses removal while managed launchers, service overrides, or global proxy state still depend on the bridge.
+- Python packaging metadata, Debian package builder, source archive builder, public-tree check, CI, security check, provenance attestation, and release workflow scaffolding.
+- Read-only latest-stable GitHub release lookup, versioned JSON envelopes, process tree/socket details, and process table pagination.
+
+### Fixed
+
+- The health indicator no longer creates repeated outbound connections to a public host; it negotiates only with the configured SOCKS5 listener.
+- AUTO can be configured to fail closed instead of silently using direct access.
+- IPv6 literal destinations are encoded as IPv6 SOCKS5 requests.
+- A client TCP half-close no longer causes the relay to discard the server response.
+- Process cleanup protects SSH sessions, shells, and terminal multiplexers.
+- Process termination uses pidfds where available and refuses unknown service drop-ins, configuration symlinks, and unknown installer destinations.
+- Wayland sessions are not evaluated with X11-only window tools.
+
+### Pending before a stable v1.0.0 release
+
+- Full GUI, package install/upgrade/rollback, SSH, desktop-entry, Flatpak/Snap, and resource benchmark validation.
+- Update download/signature verification and rollback implementation.
+
+## 0.8.0 — legacy baseline
+
+- Added read-only Linux proxy diagnostics, bridge evidence, service drop-in inspection, and connection observations.
+- Maintained the no-root, no-TUN product boundary.
+- Existing user configuration and unrelated application settings were intentionally preserved by the legacy installer.

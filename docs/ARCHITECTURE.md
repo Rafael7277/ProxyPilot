@@ -1,0 +1,29 @@
+# Architecture and support contract
+
+## Product boundary
+
+ProxyPilot 1.0 manages proxy-aware applications and services. Its HTTP bridge sends supported HTTP/HTTPS proxy requests to a SOCKS5 upstream. AUTO may use direct fallback only when the user enables it. PROXY ONLY fails closed for requests that actually use the bridge. The product does not claim to intercept arbitrary sockets, UDP, or all system traffic.
+
+## Shared application core
+
+The GUI and CLI call the same service layer for configuration, app discovery, policy evaluation, diagnostics, connection observations, and route changes. Legacy user configuration at `~/.config/proxypilot/config.json` is migrated atomically to schema version 1, with a private pre-migration backup and unknown keys preserved.
+
+## Evidence model
+
+Each app view reports four separate fields: requested policy, effective configuration, observed connections, and verification result. Evidence must include source and time. A socket to Xray is evidence of a local proxy connection, not proof that all app traffic or final egress used the proxy. Missing evidence means unable to verify.
+
+## Privilege model
+
+Normal operation and user-service integration run without root. Any future TUN or transparent-routing helper is a separate, optional component with a narrow interface and its own security review.
+
+## Runtime adapters
+
+- Linux process and socket observation: `/proc`, scoped to the current UID and subject to kernel visibility limits.
+- User services: `systemctl --user`, with clear diagnostics for an unavailable user manager or D-Bus.
+- Desktop launchers: FreeDesktop desktop-entry syntax, including D-Bus activation, field codes, actions, and sandbox limitations.
+- System proxy: GNOME GSettings and systemd user environment are separate adapters; unsupported desktop settings are reported as unsupported.
+- SSH/headless: CLI is first-class and cannot require `DISPLAY` or GTK.
+
+## Components
+
+The first 1.0 development slice keeps the tested legacy bridge modules in place while introducing a shared API package for the new CLI and GTK UI. A later move to a `src/` layout must retain legacy module entry points and be completed only with migration and install tests.

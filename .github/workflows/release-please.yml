@@ -1,0 +1,112 @@
+name: Release PR and artifacts
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.bootstrap.outputs.enabled }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out successful CI revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Wait for the initial preview release
+        id: bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.0.0-alpha.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Release Please starts after the initial v1.0.0-alpha.1 bootstrap release."
+          fi
+      - name: Create or update the release PR
+        id: release
+        if: steps.bootstrap.outputs.enabled == 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ github.token }}
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build-and-publish:
+    needs: release-pr
+    if: needs.release-pr.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Check out released revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.release-pr.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the approved project license
+        run: |
+          test -f LICENSE
+          grep -q '^license = "MIT"$' pyproject.toml
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 xvfb dbus-x11 dpkg-dev python3-pip python3-setuptools python3-wheel python3-venv
+      - name: Run release checks and build artifacts
+        env:
+          RELEASE_TAG: ${{ needs.release-pr.outputs.tag_name }}
+        run: |
+          /usr/bin/python3 -m compileall -q .
+          /usr/bin/python3 -m unittest discover -s tests -v
+          /usr/bin/python3 scripts/check_public_tree.py
+          /usr/bin/python3 scripts/security_review.py
+          version="${RELEASE_TAG#v}"
+          python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" -m pip install --upgrade 'setuptools>=77' wheel
+          "$RUNNER_TEMP/proxypilot-builder/bin/python" scripts/build_release.py --version "$version" --output dist
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+      - name: Verify artifact attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in dist/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Upload assets and publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-pr.outputs.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY"
+          gh release edit "$RELEASE_TAG" --draft=false --repo "$GITHUB_REPOSITORY"
