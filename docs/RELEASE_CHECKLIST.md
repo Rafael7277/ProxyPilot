@@ -16,5 +16,5 @@ Before a stable `v1.0.0` tag:
 - [x] `.deb`, source archives, wheel, checksums, metadata, and extracted CLI payload are validated locally.
 - [x] Public-tree check covers tracked and unignored untracked files; local configuration and the private audit remain ignored.
 - [x] License, maintainer metadata, and repository URL are configured.
-- [ ] Private vulnerability reporting is enabled on the GitHub repository.
-- [ ] Initial public source push and `1.0.0-alpha.1` release complete successfully in GitHub Actions.
+- [x] Private vulnerability reporting is enabled on the GitHub repository.
+- [x] Initial public source push and CI completed successfully. The first `1.0.0-alpha.1` signed artifact build and publication are the remaining release steps.
