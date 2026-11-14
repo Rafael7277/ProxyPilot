@@ -33,6 +33,12 @@ class LocalSFTP:
     def stat(self, path: str):
         return self._path(path).stat()
 
+    def lstat(self, path: str):
+        return self._path(path).lstat()
+
+    def open(self, path: str, mode: str = "r"):
+        return self._path(path).open(mode)
+
     def listdir_attr(self, path: str):
         result = []
         for item in self._path(path).iterdir():
@@ -208,6 +214,86 @@ class RemoteFileTests(unittest.TestCase):
 
         with self.assertRaises(PermissionError):
             remote_access._remote_exists(Denied(), "/private")
+
+    def test_new_files_and_folders_rename_and_delete_local_and_remote(self):
+        local_file = remote_access.create_local_file(self.local, "notes.txt")
+        local_folder = remote_access.create_local_directory(self.local, "new-folder")
+        with self.assertRaises(FileExistsError):
+            remote_access.create_local_file(self.local, "notes.txt")
+        local_file.write_text("hello")
+        renamed_local = remote_access.rename_local(local_file, "renamed.txt")
+        self.assertEqual(renamed_local.read_text(), "hello")
+        remote_access.delete_local(renamed_local)
+        remote_access.delete_local(local_folder, is_dir=True)
+
+        remote_file = remote_access.create_remote_file(self.session, "/", "notes.txt")
+        remote_folder = remote_access.create_remote_directory(self.session, "/", "new-folder")
+        with self.assertRaises(FileExistsError):
+            remote_access.create_remote_file(self.session, "/", "notes.txt")
+        self.sftp._path(remote_file).write_text("remote")
+        renamed_remote = remote_access.rename_remote_to(
+            self.session, remote_file, "/renamed.txt")
+        self.assertEqual(self.sftp._path(renamed_remote).read_text(), "remote")
+        remote_access.delete_remote(self.session, renamed_remote)
+        remote_access.delete_remote(self.session, remote_folder, is_dir=True)
+
+    def test_file_copy_and_move_work_between_local_and_remote_endpoints(self):
+        source = self.local / "upload.txt"
+        source.write_text("local payload")
+        uploaded = remote_access.transfer_entry(None, source, self.session, "/")
+        self.assertEqual(self.sftp._path(uploaded).read_text(), "local payload")
+        download_dir = self.root / "downloaded"
+        download_dir.mkdir()
+        downloaded = remote_access.transfer_entry(self.session, uploaded, None,
+                                                  download_dir)
+        self.assertEqual(Path(downloaded).read_text(), "local payload")
+
+        self.sftp.mkdir("/moved")
+        moved = remote_access.transfer_entry(None, source, self.session, "/moved",
+                                             move=True)
+        self.assertEqual(self.sftp._path(moved).read_text(), "local payload")
+        self.assertFalse(source.exists())
+
+    def test_remote_to_remote_move_copies_directory_before_removing_source(self):
+        destination_root = self.root / "server-destination"
+        destination_root.mkdir()
+        destination_sftp = LocalSFTP(destination_root)
+        destination_session = SimpleNamespace(closed=False, client=None,
+                                              sftp=destination_sftp)
+        source_folder = self.server / "release"
+        (source_folder / "nested").mkdir(parents=True)
+        (source_folder / "bundle.txt").write_text("bundle")
+        (source_folder / "nested" / "part.txt").write_text("part")
+
+        result = remote_access.transfer_entry(
+            self.session, "/release", destination_session, "/", move=True)
+
+        self.assertEqual(destination_sftp._path(result + "/bundle.txt").read_text(), "bundle")
+        self.assertEqual(destination_sftp._path(result + "/nested/part.txt").read_text(), "part")
+        self.assertFalse(source_folder.exists())
+        self.assertFalse(list(destination_root.glob(".*.part")))
+
+    def test_directory_copy_rejects_symlinks_and_cleans_staged_destination(self):
+        source_folder = self.server / "linked"
+        source_folder.mkdir()
+        outside = self.root / "outside.txt"
+        outside.write_text("private")
+        (source_folder / "shortcut").symlink_to(outside)
+        with self.assertRaisesRegex(remote_access.RemoteAccessError, "symbolic link"):
+            remote_access.transfer_entry(self.session, "/linked", None, self.local)
+        self.assertFalse((self.local / "linked").exists())
+        self.assertFalse(list(self.local.glob(".linked.proxypilot-*")))
+
+    def test_cancelled_copy_does_not_publish_a_partial_file(self):
+        source = self.local / "payload.bin"
+        source.write_bytes(b"payload" * 20000)
+        cancelled = __import__("threading").Event()
+        cancelled.set()
+        with self.assertRaises(InterruptedError):
+            remote_access.transfer_entry(None, source, self.session, "/",
+                                         cancel=cancelled)
+        self.assertFalse((self.server / "payload.bin").exists())
+        self.assertFalse(list(self.server.glob("*.part")))
 
 
 if __name__ == "__main__":

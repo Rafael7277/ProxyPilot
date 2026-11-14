@@ -41,9 +41,12 @@ Changes are tracked using Semantic Versioning. Release notes are reviewed before
 
 ### Added
 
-- GTK SSH workspace with saved profiles, strict host-key review, paired local/remote SFTP panes, progress-aware uploads/downloads, safe rename/delete actions, and an interactive remote shell.
+- Separate two-pane SSH/SFTP file manager with independently selectable local or SSH endpoints, including transfers between two servers.
+- Drag-and-drop move, multi-item Copy/Cut/Paste, new files and folders, rename, safe delete, overwrite confirmation, progress, and cancellation.
+- Independent SSH terminal windows; each New Terminal action opens a fresh verified SSH session and PTY.
+- Explicit saved-profile list selection, post-save reselection, and selected-profile deletion state.
 - Per-connection ProxyPilot routing for SSH, SFTP, and shell channels. The strict CONNECT route ignores bypass rules and never falls back to a direct connection.
-- In-process tests for SSH key verification, shell transport, forced proxy routing, SFTP transfers, overwrite behavior, and safe remote file operations.
+- In-process transfer tests and a GTK display smoke test for profile selection/deletion, two file panes, and multiple terminal windows.
 
 ### Security
 

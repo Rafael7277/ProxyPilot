@@ -70,6 +70,7 @@ jobs:
             XDG_STATE_HOME="$smoke_home/state" \
             PYTHONPATH=src PROXYPILOT_SMOKE_TEST=1 \
             xvfb-run -a dbus-run-session -- /usr/bin/python3 -m proxypilot_app.gtk_ui
+          xvfb-run -a dbus-run-session -- /usr/bin/python3 tests/gtk_window_smoke.py
       - name: Build distributable artifacts
         run: |
           python3 -m venv --system-site-packages "$RUNNER_TEMP/proxypilot-builder"

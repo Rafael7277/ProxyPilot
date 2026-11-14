@@ -12,7 +12,8 @@
 - Reports the requested policy, effective launcher/service configuration, observed connections, and verification result separately.
 - Includes a command-line interface suitable for local terminals and SSH sessions without `DISPLAY`.
 - Includes a GTK 4 desktop client that uses the same application API as the CLI.
-- Includes an SSH workspace with saved connection profiles, strict SSH host-key verification, SFTP browsing/transfers, and an interactive server shell.
+- Includes a standalone two-pane SSH/SFTP file manager. Either side can use a local folder or a saved SSH profile, including transfers between two servers.
+- Opens every SSH terminal in its own window with a fresh verified SSH session. Saved profiles can be selected, edited, and deleted from the profile list.
 - Can route an SSH connection through the ProxyPilot proxy-only bridge. A failed proxy tunnel stops the connection instead of falling back to a direct route.
 - Inspects same-user Linux processes, TCP sockets, GNOME settings, and systemd user environment without root.
 - Preserves legacy ProxyPilot JSON configuration and the existing `proxypilot.py serve` entry point.
@@ -25,7 +26,7 @@ Process and socket attribution is best-effort and limited to information visible
 
 The system-proxy adapter currently manages GNOME GSettings and the systemd user environment. Other desktop environments are not yet declared supported for system-proxy changes.
 
-SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; SFTP remains available without VTE.
+SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; file browsing and transfers remain available without VTE.
 
 ## Requirements
 
@@ -134,7 +135,7 @@ Launch with:
 proxypilot-gui
 ```
 
-The GTK client contains Dashboard, Applications, SSH / SFTP, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. The SSH workspace offers local and remote file panes, progress-aware single-file transfers, overwrite confirmation, and a remote PTY shell. Network and file operations run off the UI thread. Changes to app or system routes require a confirmation dialog.
+The GTK client contains Dashboard, Applications, SSH / SFTP, Live Network, Process Manager, System Proxy, Diagnostics, Settings, Updates, and About pages. The SSH page opens a separate file-manager window with two independently selected endpoints, multi-select, drag-and-drop move, Copy/Cut/Paste, create, rename, delete, overwrite confirmation, transfer progress, and cancellation. Directory copies are staged before publication; symlinks are not followed and folder deletion is limited to empty folders. Each New Terminal click opens a new window and SSH session. Network and file operations run off the UI thread. Changes to app or system routes require a confirmation dialog.
 
 ## Configuration and migration
 
