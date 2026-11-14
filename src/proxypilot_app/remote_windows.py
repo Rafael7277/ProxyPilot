@@ -110,8 +110,7 @@ class SSHConnectionFlow:
         dialog.add_button("Connect", Gtk.ResponseType.OK)
         content = dialog.get_content_area()
         label = Gtk.Label(
-            label=f"Password or private-key passphrase for "
-                  f"{self.profile.username}@{self.profile.host}",
+            label=f"SSH password for {self.profile.username}@{self.profile.host}",
             xalign=0, wrap=True)
         content.append(label)
         entry = Gtk.Entry(visibility=False, hexpand=True, activates_default=True)
@@ -269,7 +268,7 @@ class FilePane(Gtk.Box):
         self.flow = SSHConnectionFlow(self.owner, self.profile,
                                       self._connected, self.status.set_text,
                                       self._connection_failed)
-        self.flow.connect()
+        self.flow.connect(self.owner.passwords.get(self.profile.profile_id))
 
     def _connected(self, session: remote_access.RemoteSession) -> None:
         if self.closing or self.owner.closing:
@@ -404,7 +403,8 @@ class RemoteFileManagerWindow(Gtk.Window):
 
     def __init__(self, application: Gtk.Application, parent: Gtk.Window,
                  profiles: list[remote_access.SSHProfile],
-                 initial_profile: remote_access.SSHProfile | None = None):
+                 initial_profile: remote_access.SSHProfile | None = None, *,
+                 passwords: dict[str, str] | None = None):
         super().__init__(application=application, title="ProxyPilot File Manager")
         self.set_transient_for(parent)
         self.set_default_size(1200, 720)
@@ -414,6 +414,7 @@ class RemoteFileManagerWindow(Gtk.Window):
         self.busy = False
         self.cancel_event: threading.Event | None = None
         self.clipboard: dict[str, Any] | None = None
+        self.passwords = dict(passwords or {})
         self.active_side = "left"
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root.set_margin_top(12)
@@ -904,6 +905,7 @@ class RemoteFileManagerWindow(Gtk.Window):
         self.cancel_transfer()
         self.left.close()
         self.right.close()
+        self.passwords.clear()
         return False
 
 
@@ -912,13 +914,14 @@ class RemoteTerminalWindow(Gtk.Window):
 
     def __init__(self, application: Gtk.Application, parent: Gtk.Window,
                  profile: remote_access.SSHProfile, sequence: int, *,
-                 auto_connect: bool = True):
+                 password: str | None = None, auto_connect: bool = True):
         super().__init__(application=application,
                          title=f"SSH terminal {sequence} · {profile.name}")
         self.set_transient_for(parent)
         self.set_default_size(900, 620)
         self.set_size_request(600, 360)
         self.profile = profile
+        self.password = password
         self.closing = False
         self.session: remote_access.RemoteSession | None = None
         self.flow: SSHConnectionFlow | None = None
@@ -970,7 +973,9 @@ class RemoteTerminalWindow(Gtk.Window):
         self.reconnect_button.set_sensitive(False)
         self.flow = SSHConnectionFlow(self, self.profile, self._connected,
                                       self.status.set_text, self._connection_failed)
-        self.flow.connect()
+        password = self.password
+        self.password = None
+        self.flow.connect(password)
 
     def _connection_failed(self) -> None:
         self.flow = None
@@ -1106,6 +1111,7 @@ class RemoteTerminalWindow(Gtk.Window):
 
     def _close_request(self, *_args) -> bool:
         self.closing = True
+        self.password = None
         if self.flow is not None:
             self.flow.cancel()
         if self.session is not None:

@@ -32,6 +32,8 @@ The first 1.0 development slice keeps the tested legacy bridge modules in place 
 
 `proxypilot_app.remote_access` owns SSH profiles, host-key trust, the optional loopback HTTP CONNECT tunnel, authenticated SSH transports, and SFTP operations. `remote_ui` manages profiles and opens windows; `remote_windows` provides the two-endpoint file manager and one-shell-per-window terminal. Passwords are passed only for the active connection attempt and are excluded from profile serialization. SSH keys are checked against the operating-system known-hosts database and ProxyPilot's mode-0600 per-user known-hosts file. A new key is rejected until the user reviews its SHA256 fingerprint.
 
+The profile page offers a masked password field instead of an identity-file path. A supplied password is retained only in application memory for the current run, passed to newly opened SFTP and terminal sessions, cleared when the page shuts down, and excluded from logs and the on-disk profile JSON. Leaving it blank retains the interactive authentication prompt.
+
 PyPI installs require Paramiko 3.4 or newer. Older distro-maintained builds are accepted for compatibility, with the affected encrypt-then-MAC and CBC algorithms disabled during SSH negotiation.
 
 When the profile's proxy option is enabled, the client connects only to ProxyPilot's loopback proxy listener and requests a strict proxy route. That request ignores ordinary bypass entries and cannot use AUTO direct fallback. The SSH shell and SFTP channels share the verified SSH transport, so the checkbox applies to both. A proxy failure is reported as a failed connection; it never triggers a second direct SSH attempt.

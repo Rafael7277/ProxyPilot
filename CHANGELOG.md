@@ -48,6 +48,7 @@ Changes are tracked using Semantic Versioning. Release notes are reviewed before
 
 ### Added
 
+- Password field in the SSH profile page; its value is held in memory for the current app run and passed to SFTP/terminal sessions without being written to profile files.
 - Separate two-pane SSH/SFTP file manager with independently selectable local or SSH endpoints, including transfers between two servers.
 - Drag-and-drop move, multi-item Copy/Cut/Paste, new files and folders, rename, safe delete, overwrite confirmation, progress, and cancellation.
 - Independent SSH terminal windows; each New Terminal action opens a fresh verified SSH session and PTY.
