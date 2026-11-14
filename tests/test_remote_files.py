@@ -91,6 +91,52 @@ class LocalSFTP:
         self._path(path).rmdir()
 
 
+class FailingWriter:
+    def __init__(self, stream, *, fail_after: int):
+        self.stream = stream
+        self.fail_after = fail_after
+        self.written = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.stream.close()
+
+    def seek(self, offset: int):
+        self.written = offset
+        return self.stream.seek(offset)
+
+    def write(self, data: bytes):
+        if self.written >= self.fail_after:
+            raise OSError(errno.ECONNRESET, "test connection dropped")
+        remaining = self.fail_after - self.written
+        written = self.stream.write(data[:remaining])
+        self.written += written
+        if written < len(data):
+            raise OSError(errno.ECONNRESET, "test connection dropped")
+        return written
+
+    def flush(self):
+        return self.stream.flush()
+
+    def fileno(self):
+        return self.stream.fileno()
+
+
+class FailingOnceSFTP(LocalSFTP):
+    def __init__(self, root: Path):
+        super().__init__(root)
+        self.fail_next_write = True
+
+    def open(self, path: str, mode: str = "r"):
+        stream = super().open(path, mode)
+        if mode == "xb" and self.fail_next_write:
+            self.fail_next_write = False
+            return FailingWriter(stream, fail_after=8192)
+        return stream
+
+
 class RemoteFileTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -294,6 +340,82 @@ class RemoteFileTests(unittest.TestCase):
                                          cancel=cancelled)
         self.assertFalse((self.server / "payload.bin").exists())
         self.assertFalse(list(self.server.glob("*.part")))
+
+    def test_file_transfer_resumes_from_preserved_partial_after_connection_loss(self):
+        source = self.local / "resumable.bin"
+        payload = bytes(range(256)) * 4096
+        source.write_bytes(payload)
+        self.session.sftp = FailingOnceSFTP(self.server)
+        resume_id = "a" * 32
+        with self.assertRaises(OSError) as raised:
+            remote_access.transfer_entry(None, source, self.session, "/",
+                                         resume_id=resume_id)
+        self.assertEqual(raised.exception.errno, errno.ECONNRESET)
+        partial = self.server / f".resumable.bin.proxypilot-{resume_id}.part"
+        self.assertGreater(partial.stat().st_size, 0)
+        self.assertLess(partial.stat().st_size, len(payload))
+
+        remote_access.transfer_entry(None, source, self.session, "/",
+                                     resume_id=resume_id)
+        self.assertEqual((self.server / "resumable.bin").read_bytes(), payload)
+        self.assertFalse(partial.exists())
+
+    def test_directory_transfer_resumes_current_file_after_connection_loss(self):
+        source = self.local / "bundle"
+        source.mkdir()
+        payload = b"directory-payload" * 12000
+        (source / "payload.bin").write_bytes(payload)
+        self.session.sftp = FailingOnceSFTP(self.server)
+        resume_id = "b" * 32
+
+        with self.assertRaises(OSError) as raised:
+            remote_access.transfer_entry(None, source, self.session, "/",
+                                         resume_id=resume_id)
+        self.assertEqual(raised.exception.errno, errno.ECONNRESET)
+        self.assertTrue((self.server / f".proxypilot-{resume_id}.part").is_dir())
+
+        result = remote_access.transfer_entry(None, source, self.session, "/",
+                                              resume_id=resume_id)
+        self.assertEqual(self.sftp._path(str(result) + "/payload.bin").read_bytes(), payload)
+        self.assertFalse((self.server / f".proxypilot-{resume_id}.part").exists())
+
+    def test_session_fork_keeps_child_sftp_channel_alive(self):
+        class Resource:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Client(Resource):
+            def __init__(self):
+                super().__init__()
+                self.channels = []
+
+            def open_sftp(self):
+                channel = Resource()
+                self.channels.append(channel)
+                return channel
+
+        client = Client()
+        tunnel = Resource()
+        profile = remote_access.SSHProfile.create("lease", "127.0.0.1", "user")
+        parent = remote_access.RemoteSession(client, profile, tunnel)
+        child = parent.fork()
+        parent_sftp = remote_access._sftp(parent)
+        child_sftp = remote_access._sftp(child)
+        self.assertIsNot(parent_sftp, child_sftp)
+
+        parent.close()
+        self.assertTrue(parent_sftp.closed)
+        self.assertFalse(client.closed)
+        self.assertFalse(tunnel.closed)
+        self.assertFalse(child.closed)
+        self.assertIs(remote_access._sftp(child), child_sftp)
+
+        child.close()
+        self.assertTrue(client.closed)
+        self.assertTrue(tunnel.closed)
 
 
 if __name__ == "__main__":

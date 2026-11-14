@@ -146,6 +146,12 @@ class ProxyPilotWindow(Gtk.ApplicationWindow):
         list row:hover {{ background-color: {CARD2}; }}
         list row:selected {{ background-color: #2b4263; color: {TEXT}; }}
         list row:selected label {{ color: {TEXT}; }}
+        .file-list {{ background-color: {BG}; background-image: none; }}
+        .file-list row.file-entry {{ background-color: {CARD}; color: {TEXT};
+                                    background-image: none; border-bottom: 1px solid #26364f; }}
+        .file-list row.file-entry label {{ color: {TEXT}; }}
+        .file-list row.file-entry:hover {{ background-color: {CARD2}; }}
+        .file-list row.file-entry:selected {{ background-color: #2b4263; color: {TEXT}; }}
         row.app-row, row.process-row, row.dashboard-row {{ background-color: {CARD}; background-image: none; color: {TEXT}; }}
         row.app-row label, row.process-row label, row.dashboard-row label {{ color: {TEXT}; }}
         row.app-row:selected, row.process-row:selected {{ background-color: #2b4263; background-image: none; color: {TEXT}; }}

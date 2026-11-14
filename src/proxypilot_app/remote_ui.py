@@ -9,7 +9,8 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
 
 from . import remote_access
-from .remote_windows import RemoteFileManagerWindow, RemoteTerminalWindow
+from .remote_windows import (RemoteFileManagerWindow, RemoteTerminalWindow,
+                             SSHConnectionFlow)
 
 
 def _label(text: str, *, css_class: str | None = None) -> Gtk.Label:
@@ -29,6 +30,8 @@ class RemoteAccessPage(Gtk.Box):
         self.profiles: list[remote_access.SSHProfile] = []
         self.profile_id: str | None = None
         self._session_passwords: dict[str, str] = {}
+        self._connection_session: remote_access.RemoteSession | None = None
+        self._connection_flow: SSHConnectionFlow | None = None
         self.child_windows: list[Gtk.Window] = []
         self.terminal_sequence = 0
         self.closing = False
@@ -73,6 +76,9 @@ class RemoteAccessPage(Gtk.Box):
         self.port_entry.set_text("22")
         self.port_entry.set_max_width_chars(7)
         self.username_entry = self._entry("Username")
+        for entry in (self.name_entry, self.host_entry, self.port_entry,
+                      self.username_entry):
+            entry.connect("changed", self._form_changed)
         self.password_entry = Gtk.Entry(
             placeholder_text="Password (this session only)", visibility=False,
             input_purpose=Gtk.InputPurpose.PASSWORD, hexpand=True)
@@ -84,6 +90,7 @@ class RemoteAccessPage(Gtk.Box):
         self.password_entry.connect("changed", self._password_changed)
         self.proxy_check = Gtk.CheckButton(
             label="Use ProxyPilot proxy for SSH, SFTP, and terminal")
+        self.proxy_check.connect("toggled", self._form_changed)
         form = Gtk.Grid(column_spacing=8, row_spacing=8)
         self._form_row(form, 0, "Name", self.name_entry)
         self._form_row(form, 1, "Host", self.host_entry)
@@ -103,15 +110,21 @@ class RemoteAccessPage(Gtk.Box):
         profile_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
         save_button = Gtk.Button(label="Save profile")
         save_button.connect("clicked", self._save_profile)
-        file_button = Gtk.Button(label="Open File Manager")
-        file_button.add_css_class("suggested-action")
-        file_button.connect("clicked", self._open_file_manager)
-        terminal_button = Gtk.Button(label="New Terminal")
-        terminal_button.add_css_class("suggested-action")
-        terminal_button.connect("clicked", self._open_terminal)
+        self.connection_button = Gtk.Button(label="Connect")
+        self.connection_button.add_css_class("suggested-action")
+        self.connection_button.connect("clicked", self._connect_profile)
+        self.file_button = Gtk.Button(label="Open File Manager")
+        self.file_button.add_css_class("suggested-action")
+        self.file_button.set_sensitive(False)
+        self.file_button.connect("clicked", self._open_file_manager)
+        self.terminal_button = Gtk.Button(label="New Terminal")
+        self.terminal_button.add_css_class("suggested-action")
+        self.terminal_button.set_sensitive(False)
+        self.terminal_button.connect("clicked", self._open_terminal)
         profile_actions.append(save_button)
-        profile_actions.append(file_button)
-        profile_actions.append(terminal_button)
+        profile_actions.append(self.connection_button)
+        profile_actions.append(self.file_button)
+        profile_actions.append(self.terminal_button)
         content.append(profile_actions)
         content.append(_label(
             "File Manager has two independent panes. Choose a local folder or SSH profile "
@@ -124,8 +137,9 @@ class RemoteAccessPage(Gtk.Box):
         split.set_position(255)
 
         if importlib.util.find_spec("paramiko") is None:
-            file_button.set_sensitive(False)
-            terminal_button.set_sensitive(False)
+            self.connection_button.set_sensitive(False)
+            self.file_button.set_sensitive(False)
+            self.terminal_button.set_sensitive(False)
             self.status.set_text("SSH/SFTP requires Paramiko (python3-paramiko on Ubuntu/Debian).")
 
     @staticmethod
@@ -180,6 +194,14 @@ class RemoteAccessPage(Gtk.Box):
             return
         self.delete_profile_button.set_sensitive(True)
         profile = row.profile
+        if (self._connection_flow is not None and
+                self._connection_flow.profile.profile_id != profile.profile_id):
+            self._connection_flow.cancel()
+            self._connection_flow = None
+        if (self._connection_session is not None and
+                self._connection_session.profile.profile_id != profile.profile_id):
+            self._connection_session.close()
+            self._connection_session = None
         self.profile_id = profile.profile_id
         self.name_entry.set_text(profile.name)
         self.host_entry.set_text(profile.host)
@@ -187,6 +209,12 @@ class RemoteAccessPage(Gtk.Box):
         self.username_entry.set_text(profile.username)
         self.password_entry.set_text(self._session_passwords.get(profile.profile_id, ""))
         self.proxy_check.set_active(profile.use_proxy)
+        if (self._connection_session is not None and
+                not self._same_target(self._connection_session.profile,
+                                      self._form_profile())):
+            self._connection_session.close()
+            self._connection_session = None
+        self._update_connection_button()
         self.status.set_text(f"Selected {profile.name}.")
 
     def _password_changed(self, entry: Gtk.Entry) -> None:
@@ -212,6 +240,7 @@ class RemoteAccessPage(Gtk.Box):
         self.proxy_check.set_active(False)
         self.profile_list.unselect_all()
         self.delete_profile_button.set_sensitive(False)
+        self._update_connection_button()
         self.status.set_text("Enter a server profile, or select a saved profile.")
 
     def _form_profile(self) -> remote_access.SSHProfile:
@@ -267,6 +296,10 @@ class RemoteAccessPage(Gtk.Box):
         try:
             remote_access.delete_profile(profile_id)
             self._session_passwords.pop(profile_id, None)
+            if (self._connection_session is not None and
+                    self._connection_session.profile.profile_id == profile_id):
+                self._connection_session.close()
+                self._connection_session = None
             self._clear_form()
             self._reload_profiles()
             self.status.set_text("Saved profile deleted.")
@@ -279,9 +312,14 @@ class RemoteAccessPage(Gtk.Box):
         except Exception as exc:
             self._show_error("Enter a valid server profile first", exc)
             return
+        if (self._connection_session is None or
+                not self._same_target(self._connection_session.profile, profile)):
+            self.status.set_text("Connect to this profile on the SSH / SFTP page first.")
+            return
         window = RemoteFileManagerWindow(
             self.parent.get_application(), self.parent, self.profiles, profile,
-            passwords=self._passwords_for(profile))
+            passwords=self._passwords_for(profile),
+            initial_session=self._connection_session)
         self._track_window(window)
         window.present()
         self.status.set_text("File Manager opened. Choose an endpoint in each pane.")
@@ -294,6 +332,10 @@ class RemoteAccessPage(Gtk.Box):
             profile = self._form_profile()
         except Exception as exc:
             self._show_error("Enter a valid server profile first", exc)
+            return
+        if (self._connection_session is None or
+                not self._same_target(self._connection_session.profile, profile)):
+            self.status.set_text("Connect to this profile on the SSH / SFTP page first.")
             return
         self.terminal_sequence += 1
         window = RemoteTerminalWindow(
@@ -311,6 +353,84 @@ class RemoteAccessPage(Gtk.Box):
             passwords[profile.profile_id] = password
         return passwords
 
+    def _connect_profile(self, _button) -> None:
+        if self._connection_flow is not None:
+            self._connection_flow.cancel()
+            self._connection_flow = None
+            self._update_connection_button()
+            self.status.set_text("Connection attempt cancelled.")
+            return
+        try:
+            profile = self._form_profile()
+        except Exception as exc:
+            self._show_error("Enter a valid server profile first", exc)
+            return
+        if (self._connection_session is not None and
+                self._same_target(self._connection_session.profile, profile)):
+            self._connection_session.close()
+            self._connection_session = None
+            self._update_connection_button()
+            self.status.set_text("Disconnected.")
+            return
+        if self._connection_session is not None:
+            self._connection_session.close()
+            self._connection_session = None
+        self.connection_button.set_label("Connecting…")
+        self.connection_button.set_sensitive(False)
+        self._connection_flow = SSHConnectionFlow(
+            self.parent, profile, self._page_connected, self.status.set_text,
+            self._page_connection_failed)
+        self._update_connection_button()
+        self._connection_flow.connect(self.password_entry.get_text() or None)
+
+    def _page_connected(self, session: remote_access.RemoteSession) -> None:
+        if self.closing:
+            session.close()
+            return
+        if self._connection_session is not None:
+            self._connection_session.close()
+        self._connection_flow = None
+        self._connection_session = session
+        self._update_connection_button()
+        self.status.set_text(
+            f"Connected to {session.profile.host}:{session.profile.port} · "
+            f"{'ProxyPilot proxy' if session.profile.use_proxy else 'Direct'} · "
+            "SSH host key verified.")
+
+    def _page_connection_failed(self) -> None:
+        self._connection_flow = None
+        self._update_connection_button()
+
+    def _update_connection_button(self) -> None:
+        if self._connection_flow is not None:
+            self.connection_button.set_label("Cancel connection")
+            self.connection_button.set_sensitive(True)
+            self.file_button.set_sensitive(False)
+            self.terminal_button.set_sensitive(False)
+            return
+        try:
+            profile = self._form_profile()
+        except (ValueError, remote_access.RemoteAccessError):
+            profile = None
+        connected = (profile is not None and self._connection_session is not None and
+                     self._same_target(self._connection_session.profile, profile))
+        self.connection_button.set_label("Disconnect" if connected else "Connect")
+        self.connection_button.set_sensitive(profile is not None)
+        self.file_button.set_sensitive(connected)
+        self.terminal_button.set_sensitive(connected and len(self.child_windows) < 32)
+
+    def _form_changed(self, *_args) -> None:
+        if hasattr(self, "connection_button"):
+            self._update_connection_button()
+
+    @staticmethod
+    def _same_target(left: remote_access.SSHProfile,
+                     right: remote_access.SSHProfile) -> bool:
+        return (left.host, left.port, left.username,
+                left.identity_file, left.use_proxy) == (
+                    right.host, right.port, right.username,
+                    right.identity_file, right.use_proxy)
+
     def _track_window(self, window: Gtk.Window) -> None:
         self.child_windows.append(window)
         window.connect("close-request", self._forget_window, window)
@@ -320,6 +440,7 @@ class RemoteAccessPage(Gtk.Box):
             self.child_windows.remove(child)
         except ValueError:
             pass
+        self._update_connection_button()
         return False
 
     def _show_error(self, title: str, error: Exception) -> None:
@@ -333,9 +454,15 @@ class RemoteAccessPage(Gtk.Box):
 
     def shutdown(self) -> None:
         self.closing = True
+        if self._connection_flow is not None:
+            self._connection_flow.cancel()
+            self._connection_flow = None
         for window in list(self.child_windows):
             window.close()
         self.child_windows.clear()
+        if self._connection_session is not None:
+            self._connection_session.close()
+            self._connection_session = None
         self._session_passwords.clear()
         self.password_entry.set_text("")
 
