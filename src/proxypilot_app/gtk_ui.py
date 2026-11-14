@@ -17,6 +17,7 @@ except (ImportError, ValueError) as exc:  # CLI remains usable without GTK.
     raise RuntimeError("GTK 4 bindings are unavailable. Install python3-gi and gir1.2-gtk-4.0.") from exc
 
 from . import api
+from .remote_ui import RemoteAccessPage
 
 
 BG = "#0d1422"
@@ -82,6 +83,7 @@ class ProxyPilotWindow(Gtk.ApplicationWindow):
         body.append(self.stack)
         self._build_dashboard()
         self._build_apps()
+        self._build_remote_access()
         self._build_live()
         self._build_processes()
         self._build_system()
@@ -95,8 +97,19 @@ class ProxyPilotWindow(Gtk.ApplicationWindow):
         self.statusbar=Gtk.Label(label="Ready",xalign=0)
         self.statusbar.add_css_class("statusbar")
         root.append(self.statusbar)
+        self.connect("close-request",self._close_remote_session)
         self.refresh()
         GLib.timeout_add_seconds(15,self._periodic_refresh)
+
+    def _build_remote_access(self) -> None:
+        self.remote_access_page=RemoteAccessPage(
+            self,status_callback=lambda text:self.statusbar.set_text(text)
+            if hasattr(self,"statusbar") else None)
+        self.stack.add_titled(self.remote_access_page,"remote","SSH / SFTP")
+
+    def _close_remote_session(self,*_args) -> bool:
+        self.remote_access_page.shutdown()
+        return False
 
     def _build_css(self) -> None:
         css=f"""

@@ -27,3 +27,13 @@ Normal operation and user-service integration run without root. Any future TUN o
 ## Components
 
 The first 1.0 development slice keeps the tested legacy bridge modules in place while introducing a shared API package for the new CLI and GTK UI. A later move to a `src/` layout must retain legacy module entry points and be completed only with migration and install tests.
+
+## Remote access
+
+`proxypilot_app.remote_access` owns SSH profiles, host-key trust, the optional loopback HTTP CONNECT tunnel, one authenticated SSH transport, and SFTP operations. The GTK page is an adapter over this module; it does not own routing or credential policy. Passwords are passed only for the active connection attempt and are excluded from profile serialization. SSH keys are checked against the operating-system known-hosts database and ProxyPilot's mode-0600 per-user known-hosts file. A new key is rejected until the user reviews its SHA256 fingerprint.
+
+PyPI installs require Paramiko 3.4 or newer. Older distro-maintained builds are accepted for compatibility, with the affected encrypt-then-MAC and CBC algorithms disabled during SSH negotiation.
+
+When the profile's proxy option is enabled, the client connects only to ProxyPilot's loopback proxy listener and requests a strict proxy route. That request ignores ordinary bypass entries and cannot use AUTO direct fallback. The SSH shell and SFTP channels share the verified SSH transport, so the checkbox applies to both. A proxy failure is reported as a failed connection; it never triggers a second direct SSH attempt.
+
+SFTP transfers use temporary files followed by rename on the server, and temporary local files followed by an atomic install on the client. Replacing an existing file requires UI confirmation. Directory removal is non-recursive. VTE provides terminal rendering and input; shell I/O and SFTP run on worker threads so the GTK loop remains responsive.

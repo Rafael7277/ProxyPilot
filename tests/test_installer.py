@@ -50,6 +50,8 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertTrue((home/'.local/bin/proxypilot').is_file())
             self.assertTrue((data/'proxypilot/src/proxypilot_app/updates.py').is_file())
+            self.assertTrue((data/'proxypilot/src/proxypilot_app/remote_access.py').is_file())
+            self.assertTrue((data/'proxypilot/src/proxypilot_app/remote_ui.py').is_file())
             self.assertTrue((config/'systemd/user/proxypilot.service').is_file())
             self.assertFalse((app_dir/'proxypilot.desktop').exists())
             version=subprocess.run([str(home/'.local/bin/proxypilot'),'--version'],

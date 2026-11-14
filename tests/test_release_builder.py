@@ -1,5 +1,8 @@
 import importlib.util
 import pathlib
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 
@@ -33,6 +36,23 @@ class ReleaseVersionTests(unittest.TestCase):
         for value in ("1.0", "1.0.0-dev.1", "1.0.0-foo.1", "v1.0.0"):
             with self.subTest(value=value),self.assertRaises(ValueError):
                 build_release._to_python_version(value)
+
+    def test_debian_package_declares_ssh_and_embedded_terminal_runtime(self):
+        if not shutil.which("dpkg-deb"):
+            self.skipTest("dpkg-deb is unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            deb = build_release._make_deb(pathlib.Path(tmp), "1.0.0-alpha.99", "amd64",
+                                          "ProxyPilot test <noreply@example.test>")
+            control = subprocess.run(["dpkg-deb", "--field", str(deb), "Depends"],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertIn("python3-paramiko", control)
+            self.assertIn("gir1.2-vte-3.91", control)
+            extracted = pathlib.Path(tmp) / "payload"
+            extracted.mkdir()
+            subprocess.run(["dpkg-deb", "--extract", str(deb), str(extracted)],
+                           capture_output=True, check=True)
+            self.assertTrue((extracted / "usr/lib/proxypilot/src/proxypilot_app/remote_access.py").is_file())
+            self.assertTrue((extracted / "usr/lib/proxypilot/src/proxypilot_app/remote_ui.py").is_file())
 
 
 if __name__=="__main__":unittest.main()

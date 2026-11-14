@@ -460,13 +460,15 @@ def bypass(host,d):
     return any(h==x.lower().lstrip('.').rstrip('.') or (x.startswith('.') and h.endswith(x.lower())) for x in d.get('bypass_hosts',[]))
 
 
-def destination_with_route(host, port, mode, d):
+def destination_with_route(host, port, mode, d, *, force_proxy=False):
     """Return (connected socket, actual path). Logs use the chosen *actual* path."""
-    if bypass(host,d):
+    # Explicit proxy clients such as SSH/SFTP can opt out of user bypass rules.
+    # In this mode a bypass match may never create a direct socket.
+    if bypass(host,d) and not force_proxy:
         return socket.create_connection((host,port),timeout=7), 'bypass'
-    if mode == 'direct':
+    if mode == 'direct' and not force_proxy:
         return socket.create_connection((host,port),timeout=7), 'direct'
-    if mode == 'proxy':
+    if mode == 'proxy' or force_proxy:
         return connect_upstream(host,port,d), 'proxy'
     try:
         return connect_upstream(host,port,d), 'proxy'
@@ -519,6 +521,19 @@ class ProxyHandler(socketserver.StreamRequestHandler):
                 if ln in (b'\r\n',b'\n',b''):break
                 headers.append(ln)
             else:return
+            force_values=[]
+            for header in headers:
+                name,sep,value=header.partition(b':')
+                if sep and name.strip().lower()==b'x-proxypilot-force-proxy':
+                    force_values.append(value.strip().lower())
+            if len(force_values)>1 or (force_values and force_values[0]!=b'1'):
+                self.connection.sendall(b'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                return
+            force_proxy=bool(force_values)
+            if force_proxy and (method.upper()!='CONNECT' or
+                                listen_port!=int(cfg['proxy_port'])):
+                self.connection.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                return
             if method.upper() == 'CONNECT':
                 # CONNECT takes host:port (or [IPv6]:port).
                 authority = urllib.parse.urlsplit('//'+uri)
@@ -536,7 +551,7 @@ class ProxyHandler(socketserver.StreamRequestHandler):
                 # Forward the normal HTTP request without proxy credentials.
                 initial += b''.join(x for x in headers if not x.lower().startswith((b'proxy-connection:',b'proxy-authorization:')))+b'\r\n'
             if not (1<=port<=65535):return
-            remote, route = destination_with_route(host,port,mode,cfg)
+            remote, route = destination_with_route(host,port,mode,cfg,force_proxy=force_proxy)
             if monitor:
                 traffic.record(event='open', **context, host=host,port=port,route=route,status='connected')
             opened = True

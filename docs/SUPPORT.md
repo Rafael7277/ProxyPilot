@@ -9,6 +9,8 @@ Status reflects tested implementation, not aspiration.
 | KDE Plasma proxy settings | Unsupported | System proxy adapter does not write KDE settings. |
 | Wayland window attribution | Conservative / unknown | X11 window tools are skipped for Wayland; process and TCP scans remain best-effort. |
 | Headless SSH CLI | Local headless smoke passed | JSON status works with `DISPLAY` removed and without importing GTK. A separate remote SSH login was not available. |
+| SSH / SFTP workspace | Local protocol tests pass | Host-key verification, proxy-only CONNECT routing, interactive shell transport, and SFTP operation logic have local fixture coverage. A live login to a separately configured server is still needed for interoperability acceptance. |
+| Embedded SSH terminal | Implemented with GTK 4 VTE | Requires `gir1.2-vte-3.91` and a supported GTK 4 PyGObject environment. SFTP does not require VTE. |
 | User systemd bridge service | Implemented | Requires an active user manager; linger is detected but never enabled automatically. |
 | Non-systemd distributions | Unsupported for service integration | CLI diagnostics and direct process inspection may work; service install does not. |
 | Per-app desktop launching | Partial | `%U` forwarding is tested. D-Bus-activatable entries and entries with desktop actions are rejected instead of being falsely marked managed. |
