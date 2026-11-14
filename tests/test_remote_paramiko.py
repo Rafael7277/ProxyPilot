@@ -67,7 +67,7 @@ class ParamikoClientTests(unittest.TestCase):
             transport.add_server_key(self.host_key)
             try:
                 transport.start_server(server=_EchoSSHServer())
-            except (OSError, paramiko.SSHException):
+            except (EOFError, OSError, paramiko.SSHException):
                 transport.close()
                 continue
             try:
