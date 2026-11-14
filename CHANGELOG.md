@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.6](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.5...v1.0.0-alpha.6) (2026-11-14)
+
+
+### Features
+
+* **ssh:** add proxied SSH and SFTP workspace ([#14](https://github.com/Rafael7277/ProxyPilot/issues/14)) ([b6256ec](https://github.com/Rafael7277/ProxyPilot/commit/b6256ec84af6b67fca476f965d5f593cd093625c))
+
 ## [1.0.0-alpha.5](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.4...v1.0.0-alpha.5) (2026-11-14)
 
 
