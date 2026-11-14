@@ -26,7 +26,7 @@ Process and socket attribution is best-effort and limited to information visible
 
 The system-proxy adapter currently manages GNOME GSettings and the systemd user environment. Other desktop environments are not yet declared supported for system-proxy changes.
 
-SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; file browsing and transfers remain available without VTE.
+SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. The profile page's masked password field keeps a password in memory for the current app run and passes it to newly opened SSH/SFTP windows; leaving it blank prompts at connection time. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; file browsing and transfers remain available without VTE.
 
 ## Requirements
 

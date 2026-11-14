@@ -28,6 +28,7 @@ class RemoteAccessPage(Gtk.Box):
         self.status_callback = status_callback or (lambda _text: None)
         self.profiles: list[remote_access.SSHProfile] = []
         self.profile_id: str | None = None
+        self._session_passwords: dict[str, str] = {}
         self.child_windows: list[Gtk.Window] = []
         self.terminal_sequence = 0
         self.closing = False
@@ -72,7 +73,15 @@ class RemoteAccessPage(Gtk.Box):
         self.port_entry.set_text("22")
         self.port_entry.set_max_width_chars(7)
         self.username_entry = self._entry("Username")
-        self.identity_entry = self._entry("Optional private key path, e.g. ~/.ssh/id_ed25519")
+        self.password_entry = Gtk.Entry(
+            placeholder_text="Password (this session only)", visibility=False,
+            input_purpose=Gtk.InputPurpose.PASSWORD, hexpand=True)
+        self.password_entry.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
+        self.password_entry.set_icon_tooltip_text(
+            Gtk.EntryIconPosition.SECONDARY, "Show or hide password")
+        self.password_entry.connect("icon-press", self._password_icon_pressed)
+        self.password_entry.connect("changed", self._password_changed)
         self.proxy_check = Gtk.CheckButton(
             label="Use ProxyPilot proxy for SSH, SFTP, and terminal")
         form = Gtk.Grid(column_spacing=8, row_spacing=8)
@@ -80,13 +89,16 @@ class RemoteAccessPage(Gtk.Box):
         self._form_row(form, 1, "Host", self.host_entry)
         self._form_row(form, 2, "Port", self.port_entry)
         self._form_row(form, 3, "User", self.username_entry)
-        self._form_row(form, 4, "Private key", self.identity_entry)
+        self._form_row(form, 4, "Password", self.password_entry)
         form.attach(self.proxy_check, 1, 5, 1, 1)
         content.append(form)
         content.append(_label(
             "With proxy routing enabled, new SSH connections use the ProxyPilot proxy-only "
             "route. If the bridge or upstream proxy is unavailable, the connection fails "
             "without falling back to a direct route.", css_class="muted"))
+        content.append(_label(
+            "The password is used for SSH, SFTP, and terminal connections during this run "
+            "only. It is never written to the saved profile.", css_class="muted"))
 
         profile_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
         save_button = Gtk.Button(label="Save profile")
@@ -173,9 +185,22 @@ class RemoteAccessPage(Gtk.Box):
         self.host_entry.set_text(profile.host)
         self.port_entry.set_text(str(profile.port))
         self.username_entry.set_text(profile.username)
-        self.identity_entry.set_text(profile.identity_file or "")
+        self.password_entry.set_text(self._session_passwords.get(profile.profile_id, ""))
         self.proxy_check.set_active(profile.use_proxy)
         self.status.set_text(f"Selected {profile.name}.")
+
+    def _password_changed(self, entry: Gtk.Entry) -> None:
+        if self.profile_id is None:
+            return
+        password = entry.get_text()
+        if password:
+            self._session_passwords[self.profile_id] = password
+        else:
+            self._session_passwords.pop(self.profile_id, None)
+
+    def _password_icon_pressed(self, entry: Gtk.Entry, position, _event) -> None:
+        if position == Gtk.EntryIconPosition.SECONDARY:
+            entry.set_visibility(not entry.get_visibility())
 
     def _clear_form(self) -> None:
         self.profile_id = None
@@ -183,7 +208,7 @@ class RemoteAccessPage(Gtk.Box):
         self.host_entry.set_text("")
         self.port_entry.set_text("22")
         self.username_entry.set_text("")
-        self.identity_entry.set_text("")
+        self.password_entry.set_text("")
         self.proxy_check.set_active(False)
         self.profile_list.unselect_all()
         self.delete_profile_button.set_sensitive(False)
@@ -194,21 +219,25 @@ class RemoteAccessPage(Gtk.Box):
             port = int(self.port_entry.get_text().strip())
         except ValueError as exc:
             raise ValueError("SSH port must be an integer") from exc
-        identity = self.identity_entry.get_text().strip() or None
         if self.profile_id:
             profile = remote_access.SSHProfile(
                 self.profile_id, self.name_entry.get_text(), self.host_entry.get_text(),
-                port, self.username_entry.get_text(), identity,
+                port, self.username_entry.get_text(), None,
                 self.proxy_check.get_active())
             return remote_access.validate_profile(profile)
         return remote_access.SSHProfile.create(
             self.name_entry.get_text(), self.host_entry.get_text(),
-            self.username_entry.get_text(), port=port, identity_file=identity,
+            self.username_entry.get_text(), port=port,
             use_proxy=self.proxy_check.get_active())
 
     def _save_profile(self, _button) -> None:
         try:
             profile = self._form_profile()
+            password = self.password_entry.get_text()
+            if password:
+                self._session_passwords[profile.profile_id] = password
+            else:
+                self._session_passwords.pop(profile.profile_id, None)
             self.profiles = remote_access.upsert_profile(profile)
             self.profile_id = profile.profile_id
             self._reload_profiles(selected_id=profile.profile_id)
@@ -237,6 +266,7 @@ class RemoteAccessPage(Gtk.Box):
             return
         try:
             remote_access.delete_profile(profile_id)
+            self._session_passwords.pop(profile_id, None)
             self._clear_form()
             self._reload_profiles()
             self.status.set_text("Saved profile deleted.")
@@ -250,7 +280,8 @@ class RemoteAccessPage(Gtk.Box):
             self._show_error("Enter a valid server profile first", exc)
             return
         window = RemoteFileManagerWindow(
-            self.parent.get_application(), self.parent, self.profiles, profile)
+            self.parent.get_application(), self.parent, self.profiles, profile,
+            passwords=self._passwords_for(profile))
         self._track_window(window)
         window.present()
         self.status.set_text("File Manager opened. Choose an endpoint in each pane.")
@@ -267,10 +298,18 @@ class RemoteAccessPage(Gtk.Box):
         self.terminal_sequence += 1
         window = RemoteTerminalWindow(
             self.parent.get_application(), self.parent, profile,
-            self.terminal_sequence)
+            self.terminal_sequence,
+            password=self.password_entry.get_text() or None)
         self._track_window(window)
         window.present()
         self.status.set_text(f"Terminal window {self.terminal_sequence} opened.")
+
+    def _passwords_for(self, profile: remote_access.SSHProfile) -> dict[str, str]:
+        passwords = dict(self._session_passwords)
+        password = self.password_entry.get_text()
+        if password:
+            passwords[profile.profile_id] = password
+        return passwords
 
     def _track_window(self, window: Gtk.Window) -> None:
         self.child_windows.append(window)
@@ -297,6 +336,8 @@ class RemoteAccessPage(Gtk.Box):
         for window in list(self.child_windows):
             window.close()
         self.child_windows.clear()
+        self._session_passwords.clear()
+        self.password_entry.set_text("")
 
 
 __all__ = ["RemoteAccessPage"]
