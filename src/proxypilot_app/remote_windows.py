@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import posixpath
 import queue
+import shutil
 import socket
+import stat
+import tempfile
 import threading
 import time
 import uuid
@@ -14,7 +18,7 @@ from typing import Any, Callable
 
 import gi
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, GLib, GObject, Gtk
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk
 
 try:
     gi.require_version("Vte", "3.91")
@@ -278,7 +282,9 @@ class FilePane(Gtk.Box):
                     self.owner.initial_session.profile.profile_id == self.profile.profile_id):
                 try:
                     self.session = self.owner.initial_session.fork()
-                    self.status.set_text("Connected · SSH host key verified")
+                    self.status.set_text(
+                        f"Connected · verified {self.session.host_key_type or 'SSH'} key · "
+                        f"{self.session.host_fingerprint or 'fingerprint unavailable'}")
                     self.refresh()
                     return
                 except Exception:
@@ -304,7 +310,9 @@ class FilePane(Gtk.Box):
         self.flow = None
         self.session = session
         route = "ProxyPilot proxy" if session.profile.use_proxy else "Direct"
-        self.status.set_text(f"Connected · {route} · SSH host key verified")
+        self.status.set_text(
+            f"Connected · {route} · verified {session.host_key_type or 'SSH'} key · "
+            f"{session.host_fingerprint or 'fingerprint unavailable'}")
         self.path = "."
         self.path_entry.set_text(self.path)
         self.refresh()
@@ -387,6 +395,8 @@ class FilePane(Gtk.Box):
         self.items = entries
         for item in entries:
             row = Gtk.ListBoxRow()
+            row.set_selectable(True)
+            row.set_activatable(True)
             row.add_css_class("file-entry")
             row.item = item
             row.path = (posixpath.join(self.path, item["name"]) if self.session is not None
@@ -395,7 +405,10 @@ class FilePane(Gtk.Box):
             detail = "link" if item["is_symlink"] else (
                 "folder" if item["is_dir"] else f"{item['size']:,} bytes")
             label = Gtk.Label(label=f"{marker}  {item['name']}    ·    {detail}",
-                              xalign=0, selectable=True, ellipsize=3)
+                              xalign=0, selectable=False, ellipsize=3)
+            # Let the row own pointer and drag gestures. Selectable labels
+            # intercept them, which prevents row activation and drag sources.
+            label.set_can_target(False)
             row.set_child(label)
             source = Gtk.DragSource.new()
             source.set_actions(Gdk.DragAction.MOVE)
@@ -412,13 +425,16 @@ class FilePane(Gtk.Box):
                 for row in self.file_list.get_selected_rows()]
 
     def _row_activated(self, _list, row) -> None:
-        if row is None or not row.item["is_dir"]:
+        if row is None:
             return
         if row.item["is_symlink"]:
             self.status.set_text("Symbolic links are displayed but are not followed.")
             return
-        self.path_entry.set_text(row.path)
-        self.refresh()
+        if row.item["is_dir"]:
+            self.path_entry.set_text(row.path)
+            self.refresh()
+            return
+        self.owner._open_file(self.side, row)
 
     def close(self) -> None:
         self.closing = True
@@ -454,6 +470,7 @@ class RemoteFileManagerWindow(Gtk.Window):
         self.passwords = dict(passwords or {})
         self.initial_session = initial_session
         self._resume_ids: dict[str, str] = {}
+        self._opened_files: list[Path] = []
         self._context_popover: Gtk.Popover | None = None
         self.active_side = "left"
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -556,18 +573,22 @@ class RemoteFileManagerWindow(Gtk.Window):
         if row is not None and row not in pane.file_list.get_selected_rows():
             pane.file_list.unselect_all()
             pane.file_list.select_row(row)
+        elif row is None:
+            pane.file_list.unselect_all()
         self._update_buttons()
         selected = pane.selected()
         menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
 
-        def add_action(label: str, action: str) -> None:
+        def add_action(label: str, action: str, target_row=None) -> None:
             button = Gtk.Button(has_frame=False)
             button.set_child(Gtk.Label(label=label, xalign=0, hexpand=True))
-            button.connect("clicked", self._context_action, action, side)
+            button.connect("clicked", self._context_button_clicked,
+                           action, side, target_row)
             menu.append(button)
 
-        if row is not None and row.item["is_dir"]:
-            add_action("Open", "open")
+        if row is not None:
+            add_action("Open" if row.item["is_dir"] else "Open with default app",
+                       "open", row)
         if selected:
             add_action("Copy", "copy")
             add_action("Cut", "cut")
@@ -597,20 +618,28 @@ class RemoteFileManagerWindow(Gtk.Window):
         if popover.get_parent() is not None:
             popover.unparent()
 
-    def _context_action(self, button, action: str, side: str) -> None:
-        popover = button.get_ancestor(Gtk.Popover)
+    def _context_button_clicked(self, _button, action: str, side: str,
+                                target_row=None) -> None:
+        popover = self._context_popover
         if popover is not None:
             popover.popdown()
+        GLib.idle_add(self._context_action, action, side, target_row)
+
+    def _context_action(self, action: str, side: str, target_row=None) -> bool:
         self.active_side = side
         pane = self.pane(side)
+        if (target_row is not None and action in {"copy", "cut", "rename", "delete"} and
+                target_row not in pane.file_list.get_selected_rows()):
+            pane.file_list.unselect_all()
+            pane.file_list.select_row(target_row)
         if action == "open":
-            row = pane.file_list.get_selected_row()
+            row = target_row or pane.file_list.get_selected_row()
             if row is not None:
                 pane._row_activated(pane.file_list, row)
         elif action == "copy":
-            self._copy(None)
+            self._set_clipboard(move=False, target_row=target_row)
         elif action == "cut":
-            self._cut(None)
+            self._set_clipboard(move=True, target_row=target_row)
         elif action == "paste":
             self._paste(side)
         elif action == "new-file":
@@ -621,6 +650,102 @@ class RemoteFileManagerWindow(Gtk.Window):
             self._rename(None)
         elif action == "delete":
             self._delete(None)
+        return GLib.SOURCE_REMOVE
+
+    def _open_file(self, side: str, row) -> None:
+        pane = self.pane(side)
+        if pane.profile is None:
+            try:
+                path = Path(row.path).expanduser()
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                    raise ValueError("Only regular files can be opened")
+                Gio.AppInfo.launch_default_for_uri(path.resolve(strict=True).as_uri(), None)
+                self.status.set_text(f"Opened {row.item['name']} with the default application.")
+            except Exception as exc:
+                self.status.set_text(f"Cannot open file: {type(exc).__name__}: {exc}")
+            return
+        if pane.session is None:
+            self.status.set_text("Connect to the server before opening a remote file.")
+            return
+        try:
+            cache_root = Path(GLib.get_user_cache_dir()).expanduser()
+            cache_dir = cache_root / "proxypilot" / "opened-sftp-files"
+            cache_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+            for directory in (cache_root, cache_root / "proxypilot", cache_dir):
+                info = directory.lstat()
+                if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or
+                        info.st_uid != os.getuid()):
+                    raise PermissionError("The local open-file cache is not a safe user directory")
+            os.chmod(cache_root / "proxypilot", 0o700)
+            os.chmod(cache_dir, 0o700)
+            open_dir = Path(tempfile.mkdtemp(prefix="remote-", dir=cache_dir))
+            os.chmod(open_dir, 0o700)
+            local_file = open_dir / row.item["name"]
+            if local_file.name in ("", ".", ".."):
+                raise ValueError("Remote filename is invalid")
+        except Exception as exc:
+            self.status.set_text(f"Cannot prepare a private local copy: {type(exc).__name__}: {exc}")
+            return
+
+        session = pane.session
+        cancel = threading.Event()
+        self.cancel_event = cancel
+        self.busy = True
+        self.left.set_busy(True)
+        self.right.set_busy(True)
+        self._update_buttons()
+        self.progress.set_fraction(0)
+        self.progress.set_text("Preparing file to open…")
+        self.status.set_text(f"Downloading {row.item['name']} to open it locally…")
+
+        def report(done: int, total: int) -> None:
+            fraction = min(1.0, done / total) if total else 1.0
+            GLib.idle_add(self._progress_changed, fraction, done, total,
+                          1, 1, row.item["name"])
+
+        def worker():
+            try:
+                remote_access.transfer_entry(
+                    session, row.path, None, str(open_dir), move=False,
+                    progress=report, cancel=cancel,
+                    resume_id=uuid.uuid4().hex)
+                error = None
+            except Exception as exc:
+                error = exc
+            GLib.idle_add(self._remote_open_done, side, session, local_file,
+                          open_dir, error)
+
+        threading.Thread(target=worker, name="proxypilot-open-remote-file",
+                         daemon=True).start()
+
+    def _remote_open_done(self, side, session, local_file, open_dir, error) -> bool:
+        if self.closing:
+            return GLib.SOURCE_REMOVE
+        self.busy = False
+        self.cancel_event = None
+        self.left.set_busy(False)
+        self.right.set_busy(False)
+        self._update_buttons()
+        if error is not None:
+            shutil.rmtree(open_dir, ignore_errors=True)
+            self.progress.set_text("Open failed")
+            self.status.set_text(f"Could not download remote file: {type(error).__name__}: {error}")
+            return GLib.SOURCE_REMOVE
+        try:
+            if not local_file.is_file() or local_file.is_symlink():
+                raise FileNotFoundError("Downloaded file is not available")
+            Gio.AppInfo.launch_default_for_uri(local_file.as_uri(), None)
+            self._opened_files.append(local_file)
+            self.progress.set_fraction(1)
+            self.progress.set_text("Downloaded and opened")
+            self.status.set_text(
+                f"Opened a temporary local copy of {local_file.name}; the server file was unchanged.")
+        except Exception as exc:
+            shutil.rmtree(open_dir, ignore_errors=True)
+            self.progress.set_text("Open failed")
+            self.status.set_text(f"Cannot open downloaded file: {type(exc).__name__}: {exc}")
+        return GLib.SOURCE_REMOVE
 
     def _copy(self, _button) -> None:
         self._set_clipboard(move=False)
@@ -628,9 +753,17 @@ class RemoteFileManagerWindow(Gtk.Window):
     def _cut(self, _button) -> None:
         self._set_clipboard(move=True)
 
-    def _set_clipboard(self, *, move: bool) -> None:
+    def _set_clipboard(self, *, move: bool, target_row=None) -> None:
         pane = self.pane(self.active_side)
         items = pane.selected()
+        if (target_row is not None and
+                target_row not in pane.file_list.get_selected_rows()):
+            row = target_row
+            items = [{"name": row.item["name"], "path": row.path,
+                      "is_dir": row.item["is_dir"],
+                      "is_symlink": row.item["is_symlink"],
+                      "size": int(row.item.get("size") or 0),
+                      "mtime": int(row.item.get("mtime") or 0)}]
         if not items:
             self.status.set_text("Select one or more files or folders first.")
             return
@@ -1128,11 +1261,13 @@ class RemoteFileManagerWindow(Gtk.Window):
 
 
 class RemoteTerminalWindow(Gtk.Window):
-    """A fresh SSH transport and PTY per window; repeated opens never reuse shells."""
+    """A fresh shell channel per window, optionally sharing its SSH transport."""
 
     def __init__(self, application: Gtk.Application, parent: Gtk.Window,
                  profile: remote_access.SSHProfile, sequence: int, *,
-                 password: str | None = None, auto_connect: bool = True):
+                 password: str | None = None,
+                 initial_session: remote_access.RemoteSession | None = None,
+                 auto_connect: bool = True):
         super().__init__(application=application,
                          title=f"SSH terminal {sequence} · {profile.name}")
         self.set_transient_for(parent)
@@ -1140,6 +1275,7 @@ class RemoteTerminalWindow(Gtk.Window):
         self.set_size_request(600, 360)
         self.profile = profile
         self.password = password
+        self.initial_session = initial_session
         self.closing = False
         self.session: remote_access.RemoteSession | None = None
         self.flow: SSHConnectionFlow | None = None
@@ -1184,6 +1320,23 @@ class RemoteTerminalWindow(Gtk.Window):
             return
         if self.flow is not None:
             return
+        if (self.initial_session is not None and not self.initial_session.closed and
+                (self.initial_session.profile.host, self.initial_session.profile.port,
+                 self.initial_session.profile.username,
+                 self.initial_session.profile.identity_file,
+                 self.initial_session.profile.use_proxy) ==
+                (self.profile.host, self.profile.port, self.profile.username,
+                 self.profile.identity_file, self.profile.use_proxy)):
+            try:
+                self.session = self.initial_session.fork()
+            except Exception as exc:
+                self.status.set_text(
+                    f"Could not reuse the SSH connection: {type(exc).__name__}: {exc}")
+                return
+            self.initial_session = None
+            self.password = None
+            self._connected(self.session)
+            return
         self.flow = SSHConnectionFlow(self, self.profile, self._connected,
                                       self.status.set_text, self._connection_failed)
         password = self.password
@@ -1202,7 +1355,10 @@ class RemoteTerminalWindow(Gtk.Window):
         self.flow = None
         self.session = session
         route = "ProxyPilot proxy" if self.profile.use_proxy else "Direct"
-        self.status.set_text(f"Connected · {route} · verified host key · {self.profile.host}")
+        self.status.set_text(
+            f"Connected · {route} · {self.profile.host} · "
+            f"verified {session.host_key_type or 'SSH'} key · "
+            f"{session.host_fingerprint or 'fingerprint unavailable'}")
         self.terminal.reset(True, True)
         self.terminal.grab_focus()
         width = max(20, self.terminal.get_column_count())

@@ -391,6 +391,11 @@ class RemoteFileTests(unittest.TestCase):
             def __init__(self):
                 super().__init__()
                 self.channels = []
+                self.key = SimpleNamespace(
+                    asbytes=lambda: b"test-server-key", get_name=lambda: "ssh-ed25519")
+
+            def get_transport(self):
+                return SimpleNamespace(get_remote_server_key=lambda: self.key)
 
             def open_sftp(self):
                 channel = Resource()
@@ -402,6 +407,9 @@ class RemoteFileTests(unittest.TestCase):
         profile = remote_access.SSHProfile.create("lease", "127.0.0.1", "user")
         parent = remote_access.RemoteSession(client, profile, tunnel)
         child = parent.fork()
+        expected_fingerprint = remote_access.fingerprint_sha256(b"test-server-key")
+        self.assertEqual(parent.host_key_type, "ssh-ed25519")
+        self.assertEqual(child.host_fingerprint, expected_fingerprint)
         parent_sftp = remote_access._sftp(parent)
         child_sftp = remote_access._sftp(child)
         self.assertIsNot(parent_sftp, child_sftp)

@@ -1211,6 +1211,17 @@ class RemoteSession:
         self.closed = False
         self._lock = threading.RLock()
         self._lease = _lease or _TransportLease(client, tunnel)
+        self.host_fingerprint: str | None = None
+        self.host_key_type: str | None = None
+        try:
+            transport = client.get_transport()
+            host_key = transport.get_remote_server_key() if transport else None
+            if host_key is not None:
+                self.host_fingerprint = fingerprint_sha256(host_key.asbytes())
+                self.host_key_type = host_key.get_name()
+        except Exception:
+            # Test doubles and unusual Paramiko builds may not expose the key.
+            pass
 
     def fork(self) -> "RemoteSession":
         """Create an independently closable set of SSH channels on this transport."""
