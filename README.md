@@ -13,7 +13,7 @@
 - Includes a command-line interface suitable for local terminals and SSH sessions without `DISPLAY`.
 - Includes a GTK 4 desktop client that uses the same application API as the CLI.
 - Includes a standalone two-pane SSH/SFTP file manager. Connect from the SSH / SFTP profile page; remote panes connect automatically when selected. Either side can use a local folder or a saved SSH profile, including transfers between two servers.
-- Opens every SSH terminal in its own window with a fresh verified SSH session. Saved profiles can be selected, edited, and deleted from the profile list.
+- Opens each SSH terminal in its own window with a fresh shell channel on the verified SSH connection. Saved profiles can be selected, edited, and deleted from the profile list.
 - Can route an SSH connection through the ProxyPilot proxy-only bridge. A failed proxy tunnel stops the connection instead of falling back to a direct route.
 - Inspects same-user Linux processes, TCP sockets, GNOME settings, and systemd user environment without root.
 - Preserves legacy ProxyPilot JSON configuration and the existing `proxypilot.py serve` entry point.
@@ -26,7 +26,7 @@ Process and socket attribution is best-effort and limited to information visible
 
 The system-proxy adapter currently manages GNOME GSettings and the systemd user environment. Other desktop environments are not yet declared supported for system-proxy changes.
 
-SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. SSH profiles never store passwords or private keys. The profile page's masked password field keeps a password in memory for the current app run and passes it to newly opened SSH/SFTP windows; leaving it blank prompts at connection time. New server keys require a user review before they are saved in a private per-user known-hosts file. The embedded terminal uses GTK 4 VTE; file browsing and transfers remain available without VTE.
+SSH proxy routing covers that SSH TCP connection only; it does not route unrelated applications or UDP. Profiles store connection details and a private-key path, never private-key contents or passwords. You may opt to remember a password in the desktop Linux Secret Service (such as GNOME Keyring); otherwise it remains in memory for the current run. Selecting a saved profile loads its remembered password from the keyring. Profiles can be edited by selecting them, changing their fields, and choosing **Save changes**. New server keys require a user review of the SHA-256 fingerprint before they are saved in a private per-user known-hosts file; the verified fingerprint is also available after connecting. File panes and terminal windows use separate SFTP or shell channels on the profile page's verified SSH transport. Double-click local files to open them with the default Linux application; remote files are copied to a private temporary cache before opening, and the server copy is unchanged. The embedded terminal uses GTK 4 VTE; file browsing and transfers remain available without VTE.
 
 ## Requirements
 
