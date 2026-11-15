@@ -18,10 +18,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 PY_MODULES=("proxypilot.py","manager.py","desktop.py","appicons.py","traffic.py",
             "socketwatch.py","netobserve.py","appstatus.py","checkui.py","diagnostics.py")
-PACKAGE_FILES=tuple((Path("src/proxypilot_app")/name) for name in
-                    ("__init__.py","__main__.py","api.py","cli.py","gtk_ui.py",
-                     "updates.py","uninstall.py","remote_access.py","remote_ui.py",
-                     "remote_windows.py"))
+PACKAGE_DIR=ROOT/"src/proxypilot_app"
+PACKAGE_FILES=tuple(Path("src/proxypilot_app")/path.name
+                    for path in sorted(PACKAGE_DIR.glob("*.py")))
 
 
 def desktop_quote(value: str) -> str:
