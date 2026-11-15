@@ -53,6 +53,11 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue((data/'proxypilot/src/proxypilot_app/remote_access.py').is_file())
             self.assertTrue((data/'proxypilot/src/proxypilot_app/remote_windows.py').is_file())
             self.assertTrue((data/'proxypilot/src/proxypilot_app/remote_ui.py').is_file())
+            installed_package=data/'proxypilot/src/proxypilot_app'
+            for module in (ROOT/'src/proxypilot_app').glob('*.py'):
+                self.assertEqual((installed_package/module.name).read_bytes(),
+                                 module.read_bytes(),
+                                 f'Installer omitted or altered {module.name}')
             self.assertTrue((config/'systemd/user/proxypilot.service').is_file())
             self.assertFalse((app_dir/'proxypilot.desktop').exists())
             version=subprocess.run([str(home/'.local/bin/proxypilot'),'--version'],
