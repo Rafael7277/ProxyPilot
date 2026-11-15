@@ -2,6 +2,13 @@
 
 Changes are tracked using Semantic Versioning. Release notes are reviewed before publication.
 
+## [1.0.0-alpha.11](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.10...v1.0.0-alpha.11) (2026-11-15)
+
+
+### Bug Fixes
+
+* **packaging:** include all application modules in installer ([#27](https://github.com/Rafael7277/ProxyPilot/issues/27)) ([9d977b5](https://github.com/Rafael7277/ProxyPilot/commit/9d977b5fef9785aae5c779b06a77524308204ec7))
+
 ## [1.0.0-alpha.10](https://github.com/Rafael7277/ProxyPilot/compare/v1.0.0-alpha.9...v1.0.0-alpha.10) (2026-11-14)
 
 
